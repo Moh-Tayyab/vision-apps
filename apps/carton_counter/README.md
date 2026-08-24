@@ -69,3 +69,18 @@ labeled frames are added to the training set.
 
 Setup: `MODEL_BACKEND=roboflow_workflow ROBOFLOW_API_KEY=... CONF_THRESHOLD=0.11`
 (workspace/workflow already default to `muhammad-tayyab-iqnwv/carton-counter-sahi`).
+
+### Validation on full GT dataset (14 images)
+
+Across all 14 labeled images the two backends are complementary:
+
+| Input source | Best backend | Why |
+|--------------|--------------|-----|
+| High-res pallet **photos** (WhatsApp) | SAHI workflow | err 35 vs 74 cartons @0.10 — full-image misses most boxes after resize |
+| Low-res **video frames** | `local`/`roboflow` full-image | err 37 vs 68 @0.10 — tiles hurt small blurry frames |
+
+Optimal threshold shifts by source (~0.05–0.09 for video frames, ~0.10–0.14
+for photos), so no single global threshold fits mixed inputs. In production
+all frames come from our own fixed cameras, so: pick the backend + calibrate
+`CONF_THRESHOLD` once against a few hand-counted scenes from the real camera,
+then keep it fixed. Adding more labeled data remains the main accuracy lever.
