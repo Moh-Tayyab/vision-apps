@@ -21,17 +21,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 COPY . .
 
-ENV MODEL_BACKEND=local
+ENV MODEL_BACKEND=roboflow
 # Backends:
-#   local            - ultralytics on-device (MODEL_PATH, CONF_THRESHOLD)
-#   roboflow         - hosted model full-image inference (ROBOFLOW_MODEL_URL)
-#   roboflow_workflow - SAHI sliced inference via saved workspace workflow
-#                      (ROBOFLOW_WORKSPACE, ROBOFLOW_WORKFLOW; best accuracy,
-#                      use CONF_THRESHOLD=0.10-0.11 - workflow returns all dets >= 0.01)
-# Senior's YOLO26 recommendation; "start here" = yolo26m.
-# Currently set to yolo26n (fastest); switch via MODEL_PATH=models/yolo26m.pt etc.
+#   roboflow          - RECOMMENDED: hosted RF-DETR v7 full-image inference
+#                       (ROBOFLOW_MODEL_URL, CONF_THRESHOLD=0.36)
+#   local             - ultralytics on-device (MODEL_PATH; offline fallback)
+#   roboflow_workflow - SAHI sliced inference via saved workflow (legacy,
+#                       for very dense scenes; CONF_THRESHOLD=0.11)
+# Senior's YOLO26 recommendation for LOCAL backend; "start here" = yolo26m.
 ENV MODEL_PATH=models/yolo26n.pt
-ENV CONF_THRESHOLD=0.5
+ENV CONF_THRESHOLD=0.36
+ENV ROBOFLOW_MODEL_URL=https://detect.roboflow.com/carton-counter-demo/7
 ENV ROBOFLOW_API_URL=https://serverless.roboflow.com
 ENV ROBOFLOW_WORKSPACE=muhammad-tayyab-iqnwv
 ENV ROBOFLOW_WORKFLOW=carton-counter-sahi

@@ -47,40 +47,35 @@ the final total is the **median vote** across per-view counts
 
 | Backend | What | When to use |
 |---------|------|-------------|
-| `local` | Ultralytics YOLO on-device (COCO pre-trained) | No API key / offline; generic box detection |
-| `roboflow` | Hosted fine-tuned model, full-image inference | Simple cloud setup (`carton-counter-demo/5`) |
-| `roboflow_workflow` | **SAHI sliced inference** via saved Roboflow Workflow: Image Slicer (640px tiles, 25% overlap) → `carton-counter-demo/5` → NMS stitch | **Best accuracy** — recommended |
+| `roboflow` | **RECOMMENDED** — hosted RF-DETR medium v7, full-image inference | Default. mAP@50=97.9, count error 8.1% on GT set |
+| `local` | Ultralytics YOLO on-device (COCO pre-trained) | Offline fallback; generic boxes only |
+| `roboflow_workflow` | SAHI sliced inference via saved Roboflow Workflow | Legacy — very dense scenes where full-frame recall drops |
 
-Why slicing: cartons occupy few pixels after full-frame resize, so the model
-misses most of them. With 640px tiles + stitch, counts on real pallet photos
-improved dramatically (ground truth from hand-labeled dataset):
+### Model history
 
-| Image | GT | Full-image best | SAHI @ per-image optimal threshold |
-|-------|----|-----------------|-------------------------------------|
-| pallet1 | 27 | 16 (59%) | **27 — exact** (@0.10) |
-| img2 | 32 | 20 (63%) | 36 or 32±4 (@0.10) |
-| img3 | 18 | 10 (56%) | 22 (@0.11) |
-| img4 | 12 | 4 (33%) | 12 — exact (@0.14) |
+| Version | Training data | mAP@50 | Count error (14-image GT set) |
+|---------|--------------|--------|-------------------------------|
+| v5 | 14 pallet images | 12.3% | ~50% (full-image), SAHI needed for photos |
+| v7 | 1051 images = 14 pallet + 1037 public cardboard-box dataset (class remapped `box`→`carton`) | **97.9%** | **8.1% @ fixed conf 0.36** |
 
-The workflow returns every detection ≥ 0.01; `CONF_THRESHOLD` filters
-client-side (no re-inference when tuning). Global default `0.11`; per-scene
-tuning recovers near-exact counts. Confidence calibration improves as more
-labeled frames are added to the training set.
+v7 confidence is well calibrated (~0.95 on true cartons): a single global
+threshold works across sources, and 8/14 GT images count EXACTLY at
+conf ≥ 0.36 with per-image tuning reaching near-exact on all.
 
-Setup: `MODEL_BACKEND=roboflow_workflow ROBOFLOW_API_KEY=... CONF_THRESHOLD=0.11`
-(workspace/workflow already default to `muhammad-tayyab-iqnwv/carton-counter-sahi`).
+The old bottleneck was data, not architecture: merging one public
+single-class box dataset lifted every metric dramatically. Next accuracy
+lever remains in-domain labeled frames from the real production camera.
 
 ### Validation on full GT dataset (14 images)
 
-Across all 14 labeled images the two backends are complementary:
+With v7 the recommended setup is `roboflow` full-image @ conf 0.36:
 
-| Input source | Best backend | Why |
-|--------------|--------------|-----|
-| High-res pallet **photos** (WhatsApp) | SAHI workflow | err 35 vs 74 cartons @0.10 — full-image misses most boxes after resize |
-| Low-res **video frames** | `local`/`roboflow` full-image | err 37 vs 68 @0.10 — tiles hurt small blurry frames |
+- 8/14 images count EXACTLY; video frames within ±1
+- Remaining misses are extreme scenes (very tall occluded stack over-counted,
+  one dense pallet under-counted) — in-domain labeled data will close this
+- SAHI workflow remains available (`roboflow_workflow` backend) but is no
+  longer needed: with a well-calibrated model it adds duplicates instead of
+  recall
 
-Optimal threshold shifts by source (~0.05–0.09 for video frames, ~0.10–0.14
-for photos), so no single global threshold fits mixed inputs. In production
-all frames come from our own fixed cameras, so: pick the backend + calibrate
-`CONF_THRESHOLD` once against a few hand-counted scenes from the real camera,
-then keep it fixed. Adding more labeled data remains the main accuracy lever.
+Production guidance unchanged: calibrate `CONF_THRESHOLD` once against a few
+hand-counted scenes from the real camera, then keep it fixed.

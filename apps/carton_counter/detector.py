@@ -159,14 +159,14 @@ class RoboflowCloudDetector:
         start = time.perf_counter()
 
         _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        img_bytes = buffer.tobytes()
+        img_b64 = base64.b64encode(buffer.tobytes()).decode("ascii")
 
         conf = confidence if confidence is not None else self.confidence
         url = f"{self.model_url}?api_key={self.api_key}&confidence={conf}"
         response = requests.post(
             url,
-            data=img_bytes,
-            headers={"Content-Type": "application/octet-stream"},
+            data=img_b64,
+            headers={"Content-Type": "text/plain"},
             timeout=30,
         )
         response.raise_for_status()
