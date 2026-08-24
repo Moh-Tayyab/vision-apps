@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "roboflow": {
+      "type": "remote",
+      "url": "https://mcp.roboflow.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "x-api-key": "{env:ROBOFLOW_API_KEY}",
+        "Accept": "application/json, text/event-stream"
+      }
+    }
+  }
+}
