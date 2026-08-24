@@ -19,6 +19,7 @@ class CountResult:
     method: str
     processing_time_ms: float
     detections_per_view: Optional[List[DetectionResult]] = None
+    per_view_counts: Optional[List[int]] = None
 
     def to_dict(self) -> dict:
         result = {
@@ -27,6 +28,8 @@ class CountResult:
             "method": self.method,
             "processing_time_ms": round(self.processing_time_ms, 2),
         }
+        if self.per_view_counts is not None:
+            result["per_view_counts"] = self.per_view_counts
         if self.detections_per_view:
             result["per_view"] = [d.to_dict() for d in self.detections_per_view]
         return result
@@ -169,28 +172,40 @@ class CartonCounter:
         )
 
     def count_multi_angle(self, images: List[np.ndarray]) -> CountResult:
+        """Fuse counts from multiple views.
+
+        Detections are clustered WITHIN each view only (boxes from different
+        cameras live in different pixel coordinate frames, so cross-view IoU
+        is meaningless). The final total is the median vote across per-view
+        counts, which is robust to a view with occlusion or spurious boxes.
+        """
         start = time.perf_counter()
-        all_detections: List[Detection] = []
         per_view: List[DetectionResult] = []
+        per_view_counts: List[int] = []
+        all_deduped_confidences: List[float] = []
 
         for img in images:
             det_result = self.detector.detect(img)
-            all_detections.extend(det_result.detections)
+            deduped = self._cluster_detections(det_result.detections)
+            det_result.detections = deduped
             per_view.append(det_result)
+            per_view_counts.append(len(deduped))
+            all_deduped_confidences.extend(d.confidence for d in deduped)
 
-        merged = self._cluster_detections(all_detections)
+        count = int(np.median(per_view_counts)) if per_view_counts else 0
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         avg_conf = (
-            np.mean([d.confidence for d in merged]) if merged else 0.0
+            float(np.mean(all_deduped_confidences)) if all_deduped_confidences else 0.0
         )
 
         return CountResult(
-            count=len(merged),
-            confidence_avg=float(avg_conf),
+            count=count,
+            confidence_avg=avg_conf,
             method="multi_angle",
             processing_time_ms=elapsed_ms,
             detections_per_view=per_view,
+            per_view_counts=per_view_counts,
         )
 
     def count_multi_frame(self, frames: List[np.ndarray]) -> CountResult:
@@ -218,29 +233,34 @@ class CartonCounter:
         )
 
     def _cluster_detections(self, detections: List[Detection]) -> List[Detection]:
+        """Dedupe overlapping detections within a single view via IoU
+        clustering with full transitive closure (union-find)."""
         if not detections:
             return []
 
         boxes = np.array([d.bbox for d in detections])
         n = len(boxes)
-        visited = [False] * n
-        clusters: List[List[int]] = []
+        parent = list(range(n))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
 
         for i in range(n):
-            if visited[i]:
-                continue
-            cluster = [i]
-            visited[i] = True
             for j in range(i + 1, n):
-                if visited[j]:
-                    continue
                 if _compute_iou(boxes[i], boxes[j]) > self.iou_threshold:
-                    cluster.append(j)
-                    visited[j] = True
-            clusters.append(cluster)
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        parent[rj] = ri
+
+        clusters: dict[int, List[int]] = {}
+        for i in range(n):
+            clusters.setdefault(find(i), []).append(i)
 
         merged: List[Detection] = []
-        for cluster_indices in clusters:
+        for cluster_indices in clusters.values():
             cluster_dets = [detections[i] for i in cluster_indices]
             best = max(cluster_dets, key=lambda d: d.confidence)
             avg_bbox = np.mean([d.bbox for d in cluster_dets], axis=0).tolist()

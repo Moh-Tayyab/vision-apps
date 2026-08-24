@@ -75,14 +75,29 @@ class LocalYOLODetector:
         self.target_classes = target_classes or ["carton", "box"]
         self.stats = InferenceStats()
 
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model not found: {model_path}")
-        self.model = YOLO(model_path)
+        resolved = self._resolve_weights(model_path)
+        self.model = YOLO(resolved)
         self._class_names = self.model.names
 
-    def detect(self, image: np.ndarray) -> DetectionResult:
+    @staticmethod
+    def _resolve_weights(model_path: str) -> str:
+        """Use an existing path, else fall back to a bare name ultralytics can auto-download."""
+        if os.path.exists(model_path):
+            return model_path
+        basename = os.path.basename(model_path)
+        if basename != model_path and os.path.exists(basename):
+            return basename
+        import re
+
+        if re.fullmatch(r"yolo(v\d+)?[a-z0-9]*(-cls|-pose|-seg|-obb)?[nslmx](-pt)?\.pt", basename):
+            return basename
+        raise FileNotFoundError(
+            f"Model not found: {model_path} (auto-download only supported for standard YOLO weight names)"
+        )
+
+    def detect(self, image: np.ndarray, confidence: Optional[float] = None) -> DetectionResult:
         start = time.perf_counter()
-        results = self.model(image, conf=self.conf_threshold, verbose=False)
+        results = self.model(image, conf=confidence if confidence is not None else self.conf_threshold, verbose=False)
         elapsed_ms = (time.perf_counter() - start) * 1000
         self.stats.update(elapsed_ms)
 
@@ -140,13 +155,14 @@ class RoboflowCloudDetector:
         self.stats = InferenceStats()
         self._class_names: dict[int, str] = {}
 
-    def detect(self, image: np.ndarray) -> DetectionResult:
+    def detect(self, image: np.ndarray, confidence: Optional[float] = None) -> DetectionResult:
         start = time.perf_counter()
 
         _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
         img_bytes = buffer.tobytes()
 
-        url = f"{self.model_url}?api_key={self.api_key}&confidence={self.confidence}"
+        conf = confidence if confidence is not None else self.confidence
+        url = f"{self.model_url}?api_key={self.api_key}&confidence={conf}"
         response = requests.post(
             url,
             data=img_bytes,
@@ -219,13 +235,13 @@ class CartonDetector:
                 model_url=model_url, api_key=api_key, confidence=conf
             )
         else:
-            model_path = os.getenv("MODEL_PATH", "yolo11n.pt")
+            model_path = os.getenv("MODEL_PATH", "models/yolo26m.pt")
             self._detector = LocalYOLODetector(model_path=model_path, conf_threshold=conf)
 
         self._backend = backend
 
-    def detect(self, image: np.ndarray) -> DetectionResult:
-        return self._detector.detect(image)
+    def detect(self, image: np.ndarray, confidence: Optional[float] = None) -> DetectionResult:
+        return self._detector.detect(image, confidence=confidence)
 
     def get_model_info(self) -> dict:
         return self._detector.get_model_info()

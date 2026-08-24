@@ -1,0 +1,50 @@
+# All 3 independent apps. Each has its own build context, image and port —
+# no shared runtime coupling.
+#
+#   App 1  carton-counter       http://localhost:8001
+#   App 2  helmet-detection     http://localhost:8002
+#   App 3  face-authorization   http://localhost:8003
+#
+# Roboflow cloud backends read ROBOFLOW_API_KEY from the root .env file.
+
+services:
+  carton-counter:
+    build: ./apps/carton_counter
+    container_name: carton-counter
+    ports:
+      - "8001:8000"
+    environment:
+      - MODEL_BACKEND=local
+      - MODEL_PATH=models/yolo26n.pt
+      - CONF_THRESHOLD=0.5
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  helmet-detection:
+    build: ./apps/helmet_detection
+    container_name: helmet-detection
+    ports:
+      - "8002:8002"
+    environment:
+      # local = COCO persons only; roboflow = helmet/head classes
+      # (set ROBOFLOW_MODEL_URL e.g. https://detect.roboflow.com/dataperson/safety-helmet-dataset-uvh1t/1)
+      - MODEL_BACKEND=local
+      - CONF_THRESHOLD=0.5
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  face-authorization:
+    build: ./apps/face_authorization
+    container_name: face-authorization
+    ports:
+      - "8003:8003"
+    volumes:
+      - face-data:/app/data          # enrolled embeddings
+      - face-models:/app/.deepface   # deepface model weights cache
+    restart: unless-stopped
+
+volumes:
+  face-data:
+  face-models:

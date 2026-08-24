@@ -1,0 +1,78 @@
+"""Shared frame-buffer/streaming helpers for the apps.
+
+Duplicated intentionally per app so each app stays fully independent
+(senior requirement: no shared runtime coupling).
+"""
+
+from __future__ import annotations
+
+import time
+import threading
+from typing import Generator, Optional
+
+import cv2
+import numpy as np
+
+
+class FrameBuffer:
+    """Thread-safe latest-frame store for pushed camera frames."""
+
+    def __init__(self, max_frames: int = 10):
+        self._lock = threading.Lock()
+        self._frame: Optional[np.ndarray] = None
+        self._timestamp: float = 0.0
+        self._max_frames = max_frames
+        self._history: list[tuple[float, np.ndarray]] = []
+        self._frame_count: int = 0
+
+    def update(self, frame: np.ndarray) -> None:
+        with self._lock:
+            self._frame = frame.copy()
+            self._timestamp = time.time()
+            self._frame_count += 1
+            self._history.append((self._timestamp, frame.copy()))
+            if len(self._history) > self._max_frames:
+                self._history.pop(0)
+
+    def get_latest(self) -> Optional[tuple[float, np.ndarray]]:
+        with self._lock:
+            if self._frame is None:
+                return None
+            return self._timestamp, self._frame.copy()
+
+    @property
+    def frame_count(self) -> int:
+        with self._lock:
+            return self._frame_count
+
+    @property
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._frame is not None
+
+
+def mjpeg_from_buffer(
+    buffer: FrameBuffer,
+    quality: int = 80,
+    transform=None,
+) -> Generator[bytes, None, None]:
+    """MJPEG multipart stream from a FrameBuffer; optional per-frame transform."""
+    while True:
+        result = buffer.get_latest()
+        if result is None:
+            time.sleep(0.05)
+            continue
+        _, frame = result
+        if transform is not None:
+            frame = transform(frame)
+            if frame is None:
+                continue
+        ok, out = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            continue
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n"
+            + out.tobytes()
+            + b"\r\n"
+        )

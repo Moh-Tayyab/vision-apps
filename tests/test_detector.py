@@ -1,13 +1,20 @@
 """
-Test script for Carton Counter API
+Test script for Carton Counter API.
+
+Usage:
+    python tests/test_detector.py [image1.jpg image2.jpg image3.jpg]
+
+Env vars:
+    CARTON_COUNTER_URL  base URL of the API (default http://localhost:8001)
+    TEST_IMAGES_DIR     dir containing carton .jpg images (default ./test-images)
 """
 
-import requests
-import json
+import os
 import sys
-from pathlib import Path
 
-BASE_URL = "http://localhost:8000"
+import requests
+
+BASE_URL = os.getenv("CARTON_COUNTER_URL", "http://localhost:8001")
 
 
 def test_health():
@@ -20,17 +27,18 @@ def test_health():
 def test_model_info():
     """Test model info endpoint"""
     response = requests.get(f"{BASE_URL}/model/info")
-    print("Model Info:", json.dumps(response.json(), indent=2))
+    print("Model Info:", response.json())
     return response.status_code == 200
 
 
 def test_detect(image_path: str):
-    """Test single image detection"""
+    """Test single image detection (confidence is a query param)"""
     with open(image_path, "rb") as f:
         files = {"file": (image_path, f, "image/jpeg")}
-        data = {"confidence": 0.5}
-        response = requests.post(f"{BASE_URL}/detect", files=files, data=data)
-    
+        response = requests.post(
+            f"{BASE_URL}/detect", files=files, params={"confidence": 0.5}
+        )
+
     result = response.json()
     print(f"\nDetection Result for {image_path}:")
     print(f"  Count: {result.get('count', 'N/A')}")
@@ -39,19 +47,25 @@ def test_detect(image_path: str):
 
 
 def test_count_multi_angle(image_paths: list):
-    """Test multi-angle counting"""
+    """Test multi-angle counting (API expects front/side/top file fields)"""
     files = []
-    for idx, path in enumerate(image_paths, 1):
-        with open(path, "rb") as f:
-            files.append((f"file{idx}", (path, f, "image/jpeg")))
-    
-    data = {"confidence": 0.5}
-    response = requests.post(f"{BASE_URL}/count", files=files, data=data)
-    
+    fields = ["front", "side", "top"]
+    handles = []
+    for field, path in zip(fields, image_paths):
+        fh = open(path, "rb")
+        handles.append(fh)
+        files.append((field, (path, fh, "image/jpeg")))
+
+    try:
+        response = requests.post(f"{BASE_URL}/count", files=files)
+    finally:
+        for fh in handles:
+            fh.close()
+
     result = response.json()
-    print(f"\nMulti-Angle Count Result:")
+    print("\nMulti-Angle Count Result:")
     print(f"  Final Count: {result.get('count', 'N/A')}")
-    print(f"  Per-Angle Counts: {result.get('per_angle_counts', [])}")
+    print(f"  Per-View Counts: {result.get('per_view_counts', [])}")
     return response.status_code == 200
 
 
@@ -59,27 +73,33 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Carton Counter API Tests")
     print("=" * 50)
-    
-    # Test health
+
     print("\n1. Testing Health Endpoint...")
-    test_health()
-    
-    # Test model info
+    ok = test_health()
+
     print("\n2. Testing Model Info...")
-    test_model_info()
-    
+    ok &= test_model_info()
+
     # Test detection with sample images
-    test_images_dir = Path("../../../test-images")
-    if test_images_dir.exists():
-        images = list(test_images_dir.glob("*.jpg"))[:3]
+    test_images_dir = os.getenv("TEST_IMAGES_DIR", "test-images")
+    if os.path.isdir(test_images_dir):
+        images = sorted(
+            os.path.join(test_images_dir, f)
+            for f in os.listdir(test_images_dir)
+            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        )[:3]
         if images:
-            print(f"\n3. Testing Detection with {images[0].name}...")
-            test_detect(str(images[0]))
+            print(f"\n3. Testing Detection with {images[0]}...")
+            ok &= test_detect(images[0])
+            if len(images) == 3:
+                print("\n4. Testing Multi-Angle Count...")
+                ok &= test_count_multi_angle(images)
         else:
             print("\n3. No test images found")
     else:
-        print("\n3. Test images directory not found")
-    
+        print(f"\n3. Test images directory not found: {test_images_dir}")
+
     print("\n" + "=" * 50)
-    print("Tests Complete!")
+    print("Tests Complete!", "ALL PASSED" if ok else "SOME FAILED")
     print("=" * 50)
+    sys.exit(0 if ok else 1)

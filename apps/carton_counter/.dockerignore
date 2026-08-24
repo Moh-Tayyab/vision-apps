@@ -1,0 +1,14 @@
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.env
+.env.local
+tests/
+*.pt
+**/*.pt
+*.onnx
+*.engine
+*.md
+docker-compose*.yml

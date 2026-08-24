@@ -13,6 +13,7 @@ eggs/
 venv/
 env/
 ENV/
+.venv/
 
 # IDE
 .vscode/
@@ -32,6 +33,10 @@ Thumbs.db
 *.pt
 *.onnx
 *.engine
+
+# App runtime data
+data/
+.deepface/
 
 # Logs
 *.log

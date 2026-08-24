@@ -13,23 +13,19 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
 RUN pip install --no-cache-dir -r requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p models \
-    && curl -fsSL -o models/yolo26n.pt \
-       https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt \
-    && curl -fsSL -o models/yolo26m.pt \
-       https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26m.pt
+    && curl -fsSL -o yolo26n.pt \
+       https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt
 
 COPY . .
 
 ENV MODEL_BACKEND=local
-# Senior's YOLO26 recommendation; "start here" = yolo26m.
-# Currently set to yolo26n (fastest); switch via MODEL_PATH=models/yolo26m.pt etc.
-ENV MODEL_PATH=models/yolo26n.pt
+# COCO yolo26n detects persons only (status=unknown).
+# For helmet/no-helmet classes set MODEL_BACKEND=roboflow + ROBOFLOW_MODEL_URL,
+# or point MODEL_PATH at local weights trained on person/helmet/head classes.
+ENV MODEL_PATH=yolo26n.pt
 ENV CONF_THRESHOLD=0.5
-ENV PORT=8000
-ENV VIDEO_SOURCE=0
-ENV STREAM_FPS=30
+ENV PORT=8002
 
-EXPOSE 8000
+EXPOSE 8002
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]
