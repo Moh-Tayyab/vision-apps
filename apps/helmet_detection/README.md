@@ -13,12 +13,14 @@ docker build -t helmet-detection . && docker run -p 8002:8002 helmet-detection
 
 ## Model backends
 
-- **local** (default): COCO `yolo26n.pt` detects *persons only* — every person
-  gets `status: "unknown"`. Point `MODEL_PATH` at weights trained on
-  person/helmet/head classes for real helmet/no-helmet verdicts.
-- **roboflow**: any hosted model with `person`/`helmet`/`head` classes, e.g.
-  `https://detect.roboflow.com/dataperson/safety-helmet-dataset-uvh1t/1`
-  (set `MODEL_BACKEND=roboflow` + `ROBOFLOW_MODEL_URL` + `ROBOFLOW_API_KEY`).
+- **roboflow** (default): our hosted RF-DETR helmet model
+  `safety-helmet-dataset-uvh1t-aavk1/1` (head/helmet/person), trained on a
+  1088-image public safety-helmet dataset — mAP@50=95.5, recall=96.4.
+  Validated end-to-end on an online construction video: stable per-frame
+  person counts, correct helmet verdicts, violations flagged.
+- **local**: COCO `yolo26n.pt` detects *persons only* — every person gets
+  `status: "unknown"`. Point `MODEL_PATH` at weights trained on
+  person/helmet/head classes for offline use.
 
 Status logic: a `helmet` box inside the top 70% of a person box → `helmet`;
 a bare-`head` box → `no_helmet`; head-only datasets also supported.

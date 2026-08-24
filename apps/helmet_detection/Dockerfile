@@ -18,12 +18,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 COPY . .
 
-ENV MODEL_BACKEND=local
-# COCO yolo26n detects persons only (status=unknown).
-# For helmet/no-helmet classes set MODEL_BACKEND=roboflow + ROBOFLOW_MODEL_URL,
-# or point MODEL_PATH at local weights trained on person/helmet/head classes.
+ENV MODEL_BACKEND=roboflow
+# Backends:
+#   roboflow - RECOMMENDED: our hosted RF-DETR helmet model (head/helmet/person),
+#              mAP@50=95.5, recall 96.4 (trained on 1088-image safety-helmet dataset)
+#   local    - COCO yolo26n: persons only (status=unknown), offline fallback;
+#              point MODEL_PATH at helmet-trained weights for full function
+ENV ROBOFLOW_MODEL_URL=https://detect.roboflow.com/safety-helmet-dataset-uvh1t-aavk1/1
 ENV MODEL_PATH=yolo26n.pt
-ENV CONF_THRESHOLD=0.5
+ENV CONF_THRESHOLD=0.4
 ENV PORT=8002
 
 EXPOSE 8002
