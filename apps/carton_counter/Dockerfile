@@ -22,10 +22,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 COPY . .
 
 ENV MODEL_BACKEND=local
+# Backends:
+#   local            - ultralytics on-device (MODEL_PATH, CONF_THRESHOLD)
+#   roboflow         - hosted model full-image inference (ROBOFLOW_MODEL_URL)
+#   roboflow_workflow - SAHI sliced inference via saved workspace workflow
+#                      (ROBOFLOW_WORKSPACE, ROBOFLOW_WORKFLOW; best accuracy,
+#                      use CONF_THRESHOLD=0.10-0.11 - workflow returns all dets >= 0.01)
 # Senior's YOLO26 recommendation; "start here" = yolo26m.
 # Currently set to yolo26n (fastest); switch via MODEL_PATH=models/yolo26m.pt etc.
 ENV MODEL_PATH=models/yolo26n.pt
 ENV CONF_THRESHOLD=0.5
+ENV ROBOFLOW_API_URL=https://serverless.roboflow.com
+ENV ROBOFLOW_WORKSPACE=muhammad-tayyab-iqnwv
+ENV ROBOFLOW_WORKFLOW=carton-counter-sahi
+ENV ROBOFLOW_WORKFLOW_OUTPUT=stitched_predictions
 ENV PORT=8000
 ENV VIDEO_SOURCE=0
 ENV STREAM_FPS=30
