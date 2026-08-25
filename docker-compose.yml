@@ -14,9 +14,10 @@ services:
     ports:
       - "8001:8000"
     environment:
-      - MODEL_BACKEND=local
-      - MODEL_PATH=models/yolo26n.pt
-      - CONF_THRESHOLD=0.5
+      - MODEL_BACKEND=roboflow
+      - ROBOFLOW_MODEL_URL=https://detect.roboflow.com/carton-counter-demo/7
+      - CONF_THRESHOLD=0.36
+      - PORT=8000
     env_file:
       - .env
     restart: unless-stopped
@@ -27,10 +28,10 @@ services:
     ports:
       - "8002:8002"
     environment:
-      # local = COCO persons only; roboflow = helmet/head classes
-      # (set ROBOFLOW_MODEL_URL e.g. https://detect.roboflow.com/dataperson/safety-helmet-dataset-uvh1t/1)
-      - MODEL_BACKEND=local
-      - CONF_THRESHOLD=0.5
+      - MODEL_BACKEND=roboflow
+      - ROBOFLOW_MODEL_URL=https://detect.roboflow.com/safety-helmet-dataset-uvh1t-aavk1/1
+      - CONF_THRESHOLD=0.35
+      - PORT=8002
     env_file:
       - .env
     restart: unless-stopped

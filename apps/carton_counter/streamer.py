@@ -207,30 +207,45 @@ def mjpeg_from_buffer(
     buffer: FrameBuffer,
     quality: int = 80,
     transform=None,
+    fps_limit: float = 20.0,
 ) -> Generator[bytes, None, None]:
     """Yield an MJPEG multipart stream from a FrameBuffer.
 
     ``transform(frame) -> frame`` allows annotated output (e.g. detection boxes).
+    Frames are cached by timestamp to avoid redundant inferences on static buffers.
     """
+    last_ts = 0.0
+    last_output_bytes: Optional[bytes] = None
+    min_interval = 1.0 / fps_limit
+
     while True:
         result = buffer.get_latest()
         if result is None:
             time.sleep(0.05)
             continue
-        _, frame = result
-        if transform is not None:
-            frame = transform(frame)
-            if frame is None:
-                continue
-        ok, out = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        if not ok:
-            continue
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n"
-            + out.tobytes()
-            + b"\r\n"
-        )
+        ts, frame = result
+        if ts != last_ts or last_output_bytes is None:
+            processed = frame
+            if transform is not None:
+                try:
+                    transformed = transform(frame)
+                    if transformed is not None:
+                        processed = transformed
+                except Exception:
+                    processed = frame
+            ok, out = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            if ok:
+                last_output_bytes = out.tobytes()
+            last_ts = ts
+
+        if last_output_bytes is not None:
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + last_output_bytes
+                + b"\r\n"
+            )
+        time.sleep(min_interval)
 
 
 async def websocket_stream(

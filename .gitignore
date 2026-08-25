@@ -43,3 +43,13 @@ data/
 
 # Docker
 docker-compose.override.yml
+
+# Large binary files
+cloudflared
+mobileclip2_b.ts
+mobileclip_blt.ts
+*.part
+
+# Config (local only)
+opencode.jsonc
+AGENTS.md

@@ -53,23 +53,42 @@ class FrameBuffer:
 
 def mjpeg_from_buffer(
     buffer: FrameBuffer,
-    quality: int = 80,
+    quality: int = 75,
     transform=None,
+    fps_limit: float = 30.0,
 ) -> Generator[bytes, None, None]:
     """MJPEG multipart stream from a FrameBuffer; optional per-frame transform."""
+    min_frame_time = 1.0 / max(1.0, fps_limit)
+    last_sent_time = 0.0
+    last_seen_ts = 0.0
+
     while True:
         result = buffer.get_latest()
         if result is None:
-            time.sleep(0.05)
+            time.sleep(0.04)
             continue
-        _, frame = result
+
+        ts, frame = result
+        if ts == last_seen_ts:
+            time.sleep(0.015)
+            continue
+
+        last_seen_ts = ts
+        now = time.time()
+        elapsed = now - last_sent_time
+        if elapsed < min_frame_time:
+            time.sleep(min_frame_time - elapsed)
+
         if transform is not None:
             frame = transform(frame)
             if frame is None:
                 continue
+
         ok, out = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             continue
+
+        last_sent_time = time.time()
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n"

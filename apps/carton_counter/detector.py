@@ -37,6 +37,10 @@ class DetectionResult:
     image_size: tuple[int, int]
     model_name: str
 
+    @property
+    def count(self) -> int:
+        return len(self.detections)
+
     def to_dict(self) -> dict:
         return {
             "detections": [d.to_dict() for d in self.detections],
@@ -154,10 +158,87 @@ class RoboflowCloudDetector:
         self.confidence = confidence
         self.stats = InferenceStats()
         self._class_names: dict[int, str] = {}
+        self._coco_validator = None
+        self._init_validator()
+
+    def _init_validator(self):
+        try:
+            model_file = os.path.join(os.path.dirname(__file__), "models", "yolo26m.pt")
+            if not os.path.exists(model_file):
+                model_file = "yolo26m.pt"
+            self._coco_validator = YOLO(model_file)
+        except Exception as e:
+            self._coco_validator = None
+
+    @staticmethod
+    def _is_carton_shape(x1: float, y1: float, x2: float, y2: float,
+                          img_w: int, img_h: int, conf: float) -> bool:
+        """Return True only if the bounding box looks like a real carton."""
+        w = x2 - x1
+        h = y2 - y1
+        if w <= 0 or h <= 0:
+            return False
+
+        area = w * h
+        img_area = img_w * img_h
+        rel_area = area / img_area if img_area > 0 else 0
+
+        # Must cover at least 0.5% and at most 92% of the frame
+        if rel_area < 0.005 or rel_area > 0.92:
+            return False
+
+        # Aspect ratio: cartons are box-like
+        aspect = w / h
+        if aspect < 0.25 or aspect > 4.5:
+            return False
+
+        if w < 25 or h < 25:
+            return False
+
+        return True
+
+    @staticmethod
+    def _bbox_iou(boxA, boxB):
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+        inter = max(0, xB - xA) * max(0, yB - yA)
+        areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        union = areaA + areaB - inter
+        return inter / union if union > 0 else 0
 
     def detect(self, image: np.ndarray, confidence: Optional[float] = None) -> DetectionResult:
         start = time.perf_counter()
 
+        # 1. Run negative class detection via local YOLO (reject household non-carton objects)
+        negative_boxes = []
+        if self._coco_validator is not None:
+            try:
+                coco_res = self._coco_validator(image, conf=0.30, verbose=False)[0]
+                reject_classes = {
+                    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
+                    'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
+                    'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
+                    'backpack', 'handbag', 'tie', 'umbrella', 'skis', 'snowboard', 'sports ball', 'kite',
+                    'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+                    'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+                    'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+                    'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+                    'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
+                    'refrigerator', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+                }
+                if coco_res.boxes is not None:
+                    for b in coco_res.boxes:
+                        c_name = self._coco_validator.names[int(b.cls[0])]
+                        c_conf = float(b.conf[0])
+                        if c_name in reject_classes and c_conf > 0.35:
+                            negative_boxes.append(b.xyxy[0].tolist())
+            except Exception:
+                pass
+
+        # 2. Run cloud detection
         _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
         img_b64 = base64.b64encode(buffer.tobytes()).decode("ascii")
 
@@ -175,6 +256,8 @@ class RoboflowCloudDetector:
         elapsed_ms = (time.perf_counter() - start) * 1000
         self.stats.update(elapsed_ms)
 
+        h_img, w_img = image.shape[:2]
+
         detections: List[Detection] = []
         for pred in data.get("predictions", []):
             x = pred["x"]
@@ -185,20 +268,34 @@ class RoboflowCloudDetector:
             y1 = y - h / 2
             x2 = x + w / 2
             y2 = y + h / 2
-            cls_name = pred.get("class", "unknown")
-            cls_id = pred.get("class_id", -1)
+            pred_conf = pred["confidence"]
+            cls_name = pred.get("class", "carton")
+            cls_id = pred.get("class_id", 0)
+
+            # ── Reject geometric non-cartons ──
+            if not self._is_carton_shape(x1, y1, x2, y2, w_img, h_img, pred_conf):
+                continue
+
+            # ── Reject negative COCO objects (pans, bags, laptops, etc.) ──
+            box = [x1, y1, x2, y2]
+            is_negative = False
+            for neg_box in negative_boxes:
+                if self._bbox_iou(box, neg_box) > 0.35:
+                    is_negative = True
+                    break
+            if is_negative:
+                continue
 
             self._class_names[cls_id] = cls_name
             detections.append(
                 Detection(
-                    bbox=[x1, y1, x2, y2],
-                    confidence=pred["confidence"],
+                    bbox=box,
+                    confidence=pred_conf,
                     class_id=cls_id,
                     class_name=cls_name,
                 )
             )
 
-        h_img, w_img = image.shape[:2]
         return DetectionResult(
             detections=detections,
             inference_time_ms=elapsed_ms,

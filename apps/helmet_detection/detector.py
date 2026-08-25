@@ -21,9 +21,9 @@ import cv2
 import numpy as np
 import requests
 
-PERSON_CLASSES = {"person"}
-HELMET_CLASSES = {"helmet", "hardhat", "hard hat"}
-HEAD_CLASSES = {"head", "bare head", "no-helmet"}
+PERSON_CLASSES = {"person", "worker", "man", "woman", "human"}
+HELMET_CLASSES = {"helmet", "hardhat", "hard hat", "hard-hat", "with_helmet", "with helmet", "safety helmet", "safety_helmet"}
+HEAD_CLASSES = {"head", "bare head", "bare_head", "no-helmet", "no_helmet", "without_helmet", "without helmet", "no helmet", "no-hardhat", "no_hardhat", "no hardhat"}
 
 
 @dataclass
@@ -185,7 +185,11 @@ class HelmetDetector:
                 raise ValueError("ROBOFLOW_MODEL_URL and ROBOFLOW_API_KEY required for cloud backend")
             self._detector: _BaseDetector = RoboflowHelmetDetector(model_url, api_key, conf)
         else:
-            model_path = os.getenv("MODEL_PATH", "yolo11n.pt")
+            model_path = os.getenv("MODEL_PATH", "helmet_yolo.pt")
+            if not os.path.isabs(model_path):
+                candidate = os.path.join(os.path.dirname(__file__), model_path)
+                if os.path.exists(candidate):
+                    model_path = candidate
             self._detector = LocalHelmetDetector(model_path, conf)
         self._backend = backend
 
@@ -226,6 +230,15 @@ class HelmetDetector:
                         "helmet" if covered else "no_helmet",
                     )
                 )
+            for h in helmets:
+                if not any(hd.x1 <= h.cx <= hd.x2 and hd.y1 <= h.cy <= hd.y2 for hd in heads):
+                    persons.append(
+                        PersonStatus(
+                            [h.x1, h.y1, h.x2, h.y2],
+                            h.confidence,
+                            "helmet",
+                        )
+                    )
 
         return FrameResult(persons=persons, raw_boxes=raw, inference_time_ms=elapsed_ms)
 
@@ -237,3 +250,55 @@ class HelmetDetector:
             "person_classes": sorted(PERSON_CLASSES),
         }
         return info
+
+
+def draw_helmet_detections(image: np.ndarray, result: FrameResult) -> np.ndarray:
+    """Render bounding boxes, status tags, and top KPI banner onto the image."""
+    vis = image.copy()
+    h, w = vis.shape[:2]
+
+    colors = {
+        "helmet": (34, 197, 94),     # Green (#22c55e)
+        "no_helmet": (0, 0, 239),     # Red (#ef4444)
+        "unknown": (0, 165, 255),    # Orange
+    }
+    status_labels = {
+        "helmet": "HELMET (SAFE)",
+        "no_helmet": "NO HELMET (VIOLATION)",
+        "unknown": "PERSON (UNKNOWN)",
+    }
+
+    safe_count = sum(1 for p in result.persons if p.status == "helmet")
+    violation_count = sum(1 for p in result.persons if p.status == "no_helmet")
+    total_count = len(result.persons)
+
+    for p in result.persons:
+        x1, y1, x2, y2 = [int(c) for c in p.bbox]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w - 1, x2), min(h - 1, y2)
+        color = colors.get(p.status, (255, 255, 255))
+
+        # Main bounding box
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+
+        # Label tag above bounding box
+        label = f"{status_labels.get(p.status, p.status)} {p.confidence:.2f}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        label_y1 = max(0, y1 - th - 8)
+        label_y2 = y1 if y1 >= th + 8 else y1 + th + 8
+        cv2.rectangle(vis, (x1, label_y1), (x1 + tw + 6, label_y2), color, -1)
+        cv2.putText(vis, label, (x1 + 3, label_y2 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255) if p.status == "no_helmet" else (0, 0, 0), 1, cv2.LINE_AA)
+
+    # Top KPI Banner Overlay
+    overlay = vis.copy()
+    banner_w = min(420, w - 20)
+    banner_h = 50
+    cv2.rectangle(overlay, (10, 10), (10 + banner_w, 10 + banner_h), (15, 23, 42), -1)
+    cv2.addWeighted(overlay, 0.85, vis, 0.15, 0, vis)
+
+    border_color = (0, 0, 239) if violation_count > 0 else ((34, 197, 94) if safe_count > 0 else (100, 116, 139))
+    cv2.rectangle(vis, (10, 10), (10 + banner_w, 10 + banner_h), border_color, 2)
+
+    status_text = f"PERSONS: {total_count}  |  SAFE: {safe_count}  |  VIOLATIONS: {violation_count}"
+    cv2.putText(vis, status_text, (20, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (248, 250, 252), 2, cv2.LINE_AA)
+    return vis
