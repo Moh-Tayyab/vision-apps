@@ -23,13 +23,61 @@ bundles yolo26n + yolo26m; standard YOLO weight names auto-download if missing.
 | GET | `/model/info` | Model/backend info |
 | POST | `/detect?confidence=` | Single image detection |
 | POST | `/detect/visualize` | Detection with boxes drawn (JPEG) |
+| POST | `/count/pan` | **Per-layer counting (MVP)** — vertical pan video or image sequence |
 | POST | `/count` | 3-angle fusion count — fields `front`, `side`, `top` |
-| POST | `/count/video` | Count from uploaded video (samples N frames, median vote) |
+| POST | `/count/video` | Video processing (supports `method=per_layer_pan` or `multi_frame_voting`) |
 | POST | `/pallet/angle` | 3D pallet orientation (pitch/roll/yaw) from one view |
 | POST | `/pallet/correct` | Perspective-corrected pallet image |
 | POST | `/ingest/frame` | Push one JPEG frame (mobile camera) |
 | GET | `/stream` | MJPEG live view (ingest feed or local camera) |
 | GET | `/stream/detect` | MJPEG with live detection boxes |
+
+## Per-Layer Carton Counting (Phase 1 MVP)
+
+In mixed-pallet environments where box dimensions vary within or across layers, standard `rows × layers` geometric multiplication fails. The Phase 1 MVP directly clusters cartons into physical layers along a normalized vertical axis, de-duplicates within each layer, and sums the layers:
+
+$$\text{total\_count} = \sum_{l=0}^{L-1} \text{layer\_count}_l \quad (\text{never multiply})$$
+
+### 6-Step Algorithm
+
+1. **Frame Extraction**: Sample frames at regular temporal intervals (default: 0.5–0.8 s or ~8–15 frames total) preserving strict top-to-bottom temporal order ($t=0$ is the top of the stack).
+2. **Carton Detection**: Run the YOLO / Roboflow carton detector on every sampled frame.
+3. **Vertical Normalization**:
+   - Camera motion between frame $t$ and $t+1$ is estimated from the median vertical displacement of high-IoU matched bounding boxes ($\text{IoU} > 0.4$ within search window).
+   - If insufficient matched boxes exist, fallback to whole-image vertical phase correlation (`cv2.phaseCorrelate` with Hanning window).
+   - Camera offsets are accumulated:
+     $$\text{camera\_offset}[0] = 0, \quad \text{camera\_offset}[t+1] = \text{camera\_offset}[t] + \text{median\_shift}(t \to t+1)$$
+   - Each detection is mapped to a shared vertical axis:
+     $$\text{normalized\_y} = \text{camera\_offset}[\text{frame\_idx}] + (\text{pixel\_y\_center} - \text{frame\_height} / 2)$$
+4. **Layer Clustering**:
+   - Collect and sort all $\text{normalized\_y}$ coordinates across all frames.
+   - Compute gaps between consecutive sorted values: $\text{gaps} = \Delta \text{normalized\_y}$.
+   - Compute the hybrid gap threshold:
+     $$\text{threshold} = \max(\text{gap\_multiplier} \times \text{median\_gap}, 0.6 \times \text{median\_box\_height})$$
+     where $\text{gap\_multiplier}$ defaults to $1.7$ (configurable via query param).
+   - Split into clusters wherever $\text{gap} > \text{threshold}$. Each cluster is one physical layer ordered from top to bottom.
+5. **Intra-Layer De-duplication**:
+   - Inside each layer cluster independently, de-duplicate bounding boxes seen across temporally adjacent/overlapping frames using shared-coordinate IoU ($\text{IoU} \ge 0.45$) and horizontal span alignment.
+   - Never de-duplicate across different layers or faces.
+6. **Final Count & Breakdown**:
+   - Sum the de-duplicated counts of every layer.
+   - Generate base64 annotated frames with horizontal layer boundary lines and layer index tags.
+
+### Phase 1 Scope & Known Limitations
+- **In Scope**: Single continuous vertical pan/tilt video of a single pallet face (top to bottom).
+- **Out of Scope (Phase 1)**:
+  - Multi-face fusion across multiple sides/angles of the pallet.
+  - Multi-camera spatial calibration.
+  - Fully occluded / internal hidden cartons behind the visible face.
+  - Real-time streaming pan (batch video upload is targeted).
+
+### Validation & Testing
+- Run the full test suite:
+  ```bash
+  pytest tests/test_layer_counter.py -v
+  ```
+- **Held-Out Data Confirmation**: The 4 attached validation images (`media_*.jpg` showing Abbott cartons on a pallet) are strictly held-out validation data and were NEVER used for training or fine-tuning.
+
 
 ## Multi-angle fusion
 

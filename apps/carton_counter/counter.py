@@ -10,6 +10,12 @@ import cv2
 import numpy as np
 
 from detector import CartonDetector, Detection, DetectionResult
+from layer_counter import (
+    LayerBreakdown,
+    LayerDetection,
+    PanCountResult,
+    PerLayerCartonCounter,
+)
 
 
 @dataclass
@@ -151,6 +157,45 @@ class CartonCounter:
         self.detector = detector
         self.iou_threshold = iou_threshold
         self.angle_detector = AngleDetector()
+        self.layer_counter = PerLayerCartonCounter(
+            detector=detector,
+            intra_layer_iou_threshold=0.45,
+        )
+
+    def count_pan(
+        self,
+        frames: List[np.ndarray],
+        gap_multiplier: Optional[float] = None,
+        confidence: Optional[float] = None,
+        annotate: bool = True,
+    ) -> PanCountResult:
+        """Count cartons per-layer from a sequence of pan frames."""
+        return self.layer_counter.count_pan(
+            frames=frames,
+            gap_multiplier=gap_multiplier,
+            confidence=confidence,
+            annotate=annotate,
+        )
+
+    def count_pan_video(
+        self,
+        video_path: str,
+        sample_interval_sec: float = 0.6,
+        gap_multiplier: Optional[float] = None,
+        confidence: Optional[float] = None,
+        annotate: bool = True,
+    ) -> PanCountResult:
+        """Extract regular intervals from pan video and run per-layer counting."""
+        frames = self.layer_counter.sample_frames_from_video(
+            video_path=video_path,
+            sample_interval_sec=sample_interval_sec,
+        )
+        return self.count_pan(
+            frames=frames,
+            gap_multiplier=gap_multiplier,
+            confidence=confidence,
+            annotate=annotate,
+        )
 
     def count_single(self, image: np.ndarray) -> CountResult:
         start = time.perf_counter()
