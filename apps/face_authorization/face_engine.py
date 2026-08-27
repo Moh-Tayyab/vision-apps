@@ -1,21 +1,31 @@
 """Face embedding store: persists authorized-person embeddings as JSON.
 
 Uses the Python ``deepface`` library (Facenet embeddings, cosine distance).
+
+Photo storage:
+    Each enrolled person gets a directory under ``<data_dir>/photos/<name>/``
+    containing the front-facing enrollment photo(s).  MVP stores 1 photo;
+    the structure is ready for 3-4 photos in a future update.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 import uuid
 from typing import Dict, List, Optional
 
+import cv2
 import numpy as np
 
 MODEL_NAME = "Facenet"
-DETECTOR_BACKEND = "opencv"
+# "retinaface" is used instead of "opencv": OpenCV 5.x removed Haar cascade XML
+# files from its pip package. RetinaFace (installed via the retinaface package)
+# is more accurate and works out-of-the-box.
+DETECTOR_BACKEND = "retinaface"
 COSINE_THRESHOLD = 0.40  # deepface recommended threshold for Facenet
 
 
@@ -24,6 +34,8 @@ class FaceEngine:
 
     def __init__(self, store_path: str):
         self.store_path = store_path
+        # Photos live alongside the embeddings JSON: <data_dir>/photos/<name>/
+        self._photos_dir = os.path.join(os.path.dirname(store_path), "photos")
         self._lock = threading.Lock()
         # {person_name: {"embeddings": [[float]], "updated_at": ts}}
         self._persons: Dict[str, dict] = {}

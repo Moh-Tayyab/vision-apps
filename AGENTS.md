@@ -69,6 +69,21 @@ Camera 3 (Top)    → YOLO Detect → Detections_3 ─┘
 - [ ] Test with actual carton images
 - [ ] Deploy & test endpoints
 
+## App 3 - Face Authorization Status
+- [x] face_engine.py - deepface/Facenet embedding store (JSON-backed)
+- [x] main.py - FastAPI endpoints (enroll/verify/ingest/stream)
+- [x] streamer.py - MJPEG frame buffer
+- [x] requirements.txt (fixed: tf-keras added, version pins relaxed)
+- [x] Dockerfile (volumes for embeddings + model cache)
+- [x] DETECTOR_BACKEND fixed: "opencv" → "retinaface" (OpenCV 5.x removed cascade XMLs)
+- [x] Full FaceEngine test: enroll → identify → distance=0.0 → authorized=True → remove ✅
+- [x] face_engine.py - Photo storage: saves front-facing photo to `data/photos/{name}/photo.jpg`
+- [x] main.py - New endpoint: `GET /persons/{name}/photo` (serves enrollment photo)
+- [x] streamlit_app.py - Streamlit admin dashboard (4 pages: Dashboard, Enroll, Manage, Live)
+- [x] Dockerfile.streamlit - Separate lightweight Docker image for Streamlit
+- [x] requirements-streamlit.txt - Streamlit dependencies (no deepface needed)
+- [x] docker-compose.yml - Added `face-auth-ui` service (port 8501)
+
 ## Roboflow Project
 - Project: `muhammad-tayyab-iqnwv/carton-counter-demo`
 - Type: Object Detection
@@ -81,7 +96,7 @@ Camera 3 (Top)    → YOLO Detect → Detections_3 ─┘
 2. Fine-tune on carton dataset if needed
 3. Add video processing
 4. Build App 2 (Helmet Detection)
-5. Build App 3 (Face Authorization)
+5. ~~Build App 3 (Face Authorization)~~ ✅ Done (with Streamlit admin UI)
 6. Docker Compose for all 3 apps
 
 ## Senior's Key Points

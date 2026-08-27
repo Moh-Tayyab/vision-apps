@@ -1,9 +1,9 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.0
-python-multipart==0.0.9
-deepface==0.0.93
-tf-keras>=2.16.0,<2.17
-opencv-python-headless==4.10.0.84
-numpy>=1.26.0,<2
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+deepface>=0.0.93
+tf-keras>=2.16.0          # required by retinaface when tensorflow >= 2.16
+opencv-python-headless>=4.10.0.84
+numpy>=1.26.0,<3
 requests>=2.31.0
-gunicorn==22.0.0
+gunicorn>=22.0.0

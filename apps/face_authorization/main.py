@@ -15,7 +15,7 @@ from typing import List, Optional
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 
 from face_engine import COSINE_THRESHOLD, DETECTOR_BACKEND, FaceEngine
 
@@ -116,6 +116,15 @@ async def delete_person(name: str):
     if not _get_engine().remove(name):
         raise HTTPException(status_code=404, detail=f"Person not found: {name}")
     return {"status": "deleted", "name": name}
+
+
+@app.get("/persons/{name}/photo")
+async def get_person_photo(name: str):
+    """Serve the enrollment photo for a person (JPEG)."""
+    photo_path = _get_engine().get_person_photo_path(name)
+    if photo_path is None:
+        raise HTTPException(status_code=404, detail=f"No photo found for: {name}")
+    return FileResponse(photo_path, media_type="image/jpeg", filename=f"{name}.jpg")
 
 
 # ---------------- Verification ----------------

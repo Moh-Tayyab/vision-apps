@@ -4,6 +4,7 @@
 #   App 1  carton-counter       http://localhost:8001
 #   App 2  helmet-detection     http://localhost:8002
 #   App 3  face-authorization   http://localhost:8003
+#   App 3  face-auth-ui         http://localhost:8501  (Streamlit admin)
 #
 # Roboflow cloud backends read ROBOFLOW_API_KEY from the root .env file.
 
@@ -20,6 +21,11 @@ services:
       - PORT=8000
     env_file:
       - .env
+    devices:
+      - "/dev/video0:/dev/video0"
+      - "/dev/video1:/dev/video1"
+    group_add:
+      - "44"   # video group on host (run: getent group video)
     restart: unless-stopped
 
   helmet-detection:
@@ -42,8 +48,21 @@ services:
     ports:
       - "8003:8003"
     volumes:
-      - face-data:/app/data          # enrolled embeddings
+      - face-data:/app/data          # enrolled embeddings + photos
       - face-models:/app/.deepface   # deepface model weights cache
+    restart: unless-stopped
+
+  face-auth-ui:
+    build:
+      context: ./apps/face_authorization
+      dockerfile: Dockerfile.streamlit
+    container_name: face-auth-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - FASTAPI_URL=http://face-authorization:8003
+    depends_on:
+      - face-authorization
     restart: unless-stopped
 
 volumes:
