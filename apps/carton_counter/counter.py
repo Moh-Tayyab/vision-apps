@@ -16,6 +16,12 @@ from layer_counter import (
     PanCountResult,
     PerLayerCartonCounter,
 )
+from dual_fusion_engine import (
+    DualFusionEngine,
+    DualFusionResult,
+    LayerInfo,
+)
+
 
 
 @dataclass
@@ -161,6 +167,23 @@ class CartonCounter:
             detector=detector,
             intra_layer_iou_threshold=0.45,
         )
+        self.dual_fusion_engine = DualFusionEngine(detector=detector)
+
+    def count_dual(
+        self,
+        front_image: np.ndarray,
+        side_image: np.ndarray,
+        confidence: Optional[float] = None,
+        annotate: bool = True,
+    ) -> DualFusionResult:
+        """Count cartons per-layer from Front and Side views (N1_k * N2_k)."""
+        return self.dual_fusion_engine.fuse(
+            front_image=front_image,
+            side_image=side_image,
+            confidence=confidence,
+            annotate=annotate,
+        )
+
 
     def count_pan(
         self,

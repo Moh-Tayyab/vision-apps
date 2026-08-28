@@ -6,9 +6,13 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(usecwd=True))
 
 import os
+import sys
 import tempfile
 import time
 from typing import List, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 
 import cv2
 import numpy as np
@@ -17,13 +21,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Res
 
 from detector import CartonDetector
 from counter import CartonCounter, CountResult
+from dual_fusion_engine import DualFusionEngine, DualFusionResult, LayerInfo
 from streamer import FrameBuffer, MobileCameraStream, mjpeg_from_buffer, websocket_stream
 import threading
 
 app = FastAPI(
     title="Carton Counter",
     description="Pallet carton counting system with multi-angle fusion",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 _detector: Optional[CartonDetector] = None
@@ -41,9 +46,19 @@ _camera_info: dict[str, dict] = {
     "cam1": {"count": 0, "detections": [], "inference_time_ms": 0.0, "timestamp": 0.0, "frames": 0, "source": "mobile"},
     "cam2": {"count": 0, "detections": [], "inference_time_ms": 0.0, "timestamp": 0.0, "frames": 0, "source": "mobile"},
 }
+_dual_fusion_info: dict = {
+    "total_count": 0,
+    "layers_count": 0,
+    "layers": [],
+    "cam1_count": 0,
+    "cam2_count": 0,
+    "is_dual_active": False,
+    "timestamp": 0.0,
+}
 _last_seen_ts: dict[str, float] = {"cam1": 0.0, "cam2": 0.0}
 _detection_lock = threading.Lock()
 _worker_running = True
+
 
 # USB/wired capture workers: cam_id -> threading.Thread
 _usb_capture_threads: dict[str, threading.Thread] = {}
@@ -119,8 +134,9 @@ def stop_usb_camera(cam_id: str) -> None:
 
 
 def _async_detection_worker():
-    """Continuous background worker that runs AI inference on fresh video frames from all cameras."""
-    global _camera_detections, _camera_info, _last_seen_ts
+    """Continuous background worker that runs AI inference on fresh video frames from all cameras,
+    and fuses dual-camera feeds into a live layer-wise multiplied total count."""
+    global _camera_detections, _camera_info, _last_seen_ts, _dual_fusion_info
     while _worker_running:
         try:
             processed_any = False
@@ -147,10 +163,65 @@ def _async_detection_worker():
                             "frames": buf.frame_count,
                             "source": prev_source,
                         }
+
+            # Run live dual-camera layer fusion when at least one camera is active
+            with _detection_lock:
+                c1_dets = list(_camera_detections.get("cam1", []))
+                c2_dets = list(_camera_detections.get("cam2", []))
+                buf1 = _ingest_buffers.get("cam1")
+                buf2 = _ingest_buffers.get("cam2")
+                now = time.time()
+                c1_active = bool(buf1 and buf1.is_active and (now - _camera_info.get("cam1", {}).get("timestamp", 0) < 6))
+                c2_active = bool(buf2 and buf2.is_active and (now - _camera_info.get("cam2", {}).get("timestamp", 0) < 6))
+
+            if c1_active and c2_active:
+                h1 = 480
+                h2 = 480
+                fc = DualFusionEngine.cluster_layers_from_detections(c1_dets, h1)
+                sc = DualFusionEngine.cluster_layers_from_detections(c2_dets, h2)
+                layers_info, total_cnt = DualFusionEngine.align_and_multiply_layers(fc, sc, h1, h2)
+                with _detection_lock:
+                    _dual_fusion_info = {
+                        "total_count": total_cnt,
+                        "layers_count": len(layers_info),
+                        "layers": [l.to_dict() for l in layers_info],
+                        "cam1_count": len(c1_dets),
+                        "cam2_count": len(c2_dets),
+                        "is_dual_active": True,
+                        "timestamp": now,
+                    }
+            elif c1_active and c1_dets:
+                fc = DualFusionEngine.cluster_layers_from_detections(c1_dets, 480)
+                layers_info, total_cnt = DualFusionEngine.align_and_multiply_layers(fc, [], 480, 480)
+                with _detection_lock:
+                    _dual_fusion_info = {
+                        "total_count": total_cnt,
+                        "layers_count": len(layers_info),
+                        "layers": [l.to_dict() for l in layers_info],
+                        "cam1_count": len(c1_dets),
+                        "cam2_count": 0,
+                        "is_dual_active": False,
+                        "timestamp": now,
+                    }
+            elif c2_active and c2_dets:
+                sc = DualFusionEngine.cluster_layers_from_detections(c2_dets, 480)
+                layers_info, total_cnt = DualFusionEngine.align_and_multiply_layers([], sc, 480, 480)
+                with _detection_lock:
+                    _dual_fusion_info = {
+                        "total_count": total_cnt,
+                        "layers_count": len(layers_info),
+                        "layers": [l.to_dict() for l in layers_info],
+                        "cam1_count": 0,
+                        "cam2_count": len(c2_dets),
+                        "is_dual_active": False,
+                        "timestamp": now,
+                    }
+
             if not processed_any:
                 time.sleep(0.03)
         except Exception as e:
             time.sleep(0.05)
+
 
 
 def _get_local_ip() -> str:
@@ -268,15 +339,30 @@ async def health():
 
 @app.get("/usb/cameras")
 async def list_usb_cameras():
-    """Detect available USB/V4L2 cameras on this machine."""
+    """Enumerate available V4L2 cameras WITHOUT opening them (avoids powering on the
+    internal laptop webcam). Reads device metadata from /sys/class/video4linux."""
+    import glob
+    import os
+
     available = []
-    for i in range(8):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            available.append({"device_index": i, "path": f"/dev/video{i}", "resolution": f"{w}x{h}"})
-            cap.release()
+    for dev in sorted(glob.glob("/dev/video*")):
+        idx = int(dev.replace("/dev/video", ""))
+        name = ""
+        sysfs_name = f"/sys/class/video4linux/video{idx}/name"
+        try:
+            with open(sysfs_name, "r") as f:
+                name = f.read().strip()
+        except OSError:
+            name = "Unknown"
+        is_internal = any(
+            kw in name.lower() for kw in ("integrated", "internal", "webcam", "isight", "camera hub")
+        )
+        available.append({
+            "device_index": idx,
+            "path": dev,
+            "name": name,
+            "internal": is_internal,
+        })
     return {"cameras": available, "count": len(available)}
 
 
@@ -318,25 +404,50 @@ def _draw_detections(image: np.ndarray, detections, label_prefix: str = "") -> n
     vis = image.copy()
     h, w = vis.shape[:2]
     count = len(detections)
-    for det in detections:
-        x1, y1, x2, y2 = [int(c) for c in det.bbox]
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w - 1, x2), min(h - 1, y2)
-        cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"{det.class_name} {det.confidence:.2f}"
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-        label_y1 = max(0, y1 - th - 6)
-        label_y2 = y1 if y1 >= th + 6 else y1 + th + 6
-        cv2.rectangle(vis, (x1, label_y1), (x1 + tw + 6, label_y2), (0, 200, 0), -1)
-        cv2.putText(vis, label, (x1 + 3, label_y2 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
-    
-    # Overlay Top Header Banner with Total Carton Count
+
+    # Layer clustering for visual grouping
+    layer_clusters = DualFusionEngine.cluster_layers_from_detections(detections, h)
+    layer_colors = [
+        (34, 197, 94),   # Green
+        (59, 130, 246),  # Blue
+        (249, 115, 22),  # Orange
+        (168, 85, 247),  # Purple
+        (236, 72, 153),  # Pink
+        (20, 184, 166),  # Teal
+        (234, 179, 8),   # Yellow
+    ]
+
+    for l_idx, cluster in enumerate(layer_clusters):
+        color = layer_colors[l_idx % len(layer_colors)]
+        layer_num = l_idx + 1
+
+        # Draw guideline across frame
+        c_y1 = min(d.bbox[1] for d in cluster)
+        c_y2 = max(d.bbox[3] for d in cluster)
+        mid_y = int((c_y1 + c_y2) / 2.0)
+        if 0 <= mid_y < h:
+            cv2.line(vis, (0, mid_y), (w, mid_y), color, 1, cv2.LINE_AA)
+
+        for col_idx, det in enumerate(cluster):
+            x1, y1, x2, y2 = [int(c) for c in det.bbox]
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w - 1, x2), min(h - 1, y2)
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+            label = f"L{layer_num}-{col_idx+1}: {det.confidence:.2f}"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            label_y1 = max(0, y1 - th - 6)
+            label_y2 = y1 if y1 >= th + 6 else y1 + th + 6
+            cv2.rectangle(vis, (x1, label_y1), (x1 + tw + 6, label_y2), color, -1)
+            cv2.putText(vis, label, (x1 + 3, label_y2 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+
+    # Overlay Top Header Banner with Total Carton Count & Layer count
     overlay = vis.copy()
-    banner_w = min(320, w - 20)
+    banner_w = min(360, w - 20)
     cv2.rectangle(overlay, (10, 10), (10 + banner_w, 55), (15, 23, 42), -1)
     cv2.addWeighted(overlay, 0.75, vis, 0.25, 0, vis)
     cv2.rectangle(vis, (10, 10), (10 + banner_w, 55), (34, 197, 94), 2)
-    cv2.putText(vis, f"{label_prefix}CARTONS: {count}", (20, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (74, 222, 128), 2, cv2.LINE_AA)
+    layer_tag = f" ({len(layer_clusters)} Layers)" if layer_clusters else ""
+    cv2.putText(vis, f"{label_prefix}CARTONS: {count}{layer_tag}", (18, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (74, 222, 128), 2, cv2.LINE_AA)
     return vis
 
 
@@ -357,6 +468,33 @@ async def detect_visualize(
     return Response(content=buffer.tobytes(), media_type="image/jpeg")
 
 
+@app.post("/count/dual")
+async def count_dual(
+    front: UploadFile = File(..., description="Front view camera image (Camera 1)"),
+    side: UploadFile = File(..., description="Side view camera image (Camera 2)"),
+    confidence: Optional[float] = Query(default=None, description="Confidence threshold override"),
+    annotate: bool = Query(default=True, description="Whether to include base64 annotated images"),
+):
+    """Dual-Camera Layer-Wise Pallet Carton Counting Endpoint.
+
+    Identifies horizontal layers on Front and Side faces, computes N1_k * N2_k per layer,
+    and returns the total pallet carton count and layer breakdown.
+    """
+    front_bytes = await front.read()
+    side_bytes = await side.read()
+    front_img = _read_image(front_bytes)
+    side_img = _read_image(side_bytes)
+
+    counter = _get_counter()
+    result = counter.count_dual(
+        front_image=front_img,
+        side_image=side_img,
+        confidence=confidence,
+        annotate=annotate,
+    )
+    return result.to_dict()
+
+
 @app.post("/count")
 async def count(
     front: UploadFile = File(...),
@@ -372,6 +510,7 @@ async def count(
 
     result = counter.count_multi_angle(images)
     return result.to_dict()
+
 
 
 @app.post("/pallet/angle")
@@ -539,10 +678,7 @@ async def ingest_frame(
 async def stream(cam: str = Query(default="cam1")):
     """MJPEG live view for a specific camera (defaults to cam1)."""
     buf = _get_buffer(cam)
-    if buf.is_active:
-        gen = mjpeg_from_buffer(buf, fps_limit=30.0)
-    else:
-        gen = _ensure_started(_get_stream()).mjpeg_generator()
+    gen = mjpeg_from_buffer(buf, fps_limit=30.0)
     return StreamingResponse(
         gen,
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -562,16 +698,12 @@ async def stream_detect(
         return _draw_detections(frame, current_dets, label_prefix=label_prefix)
 
     buf = _get_buffer(cam)
-    if buf.is_active:
-        gen = mjpeg_from_buffer(buf, quality=75, transform=annotate, fps_limit=30.0)
-    else:
-        stream_obj = _ensure_started(_get_stream())
-        buffer = stream_obj._buffer
-        gen = mjpeg_from_buffer(buffer, quality=75, transform=annotate, fps_limit=30.0)
+    gen = mjpeg_from_buffer(buf, quality=75, transform=annotate, fps_limit=30.0)
     return StreamingResponse(
         gen,
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
 
 
 @app.get("/stream/status")
@@ -599,10 +731,15 @@ async def stream_status():
 
         cam1_info = _camera_info.get("cam1", {"count": 0, "timestamp": 0.0, "detections": []})
         cam1_buf = _ingest_buffers.get("cam1")
+        dual_data = dict(_dual_fusion_info)
+
+    # Use layer-multiplied count if dual cameras are active, otherwise visible sum
+    final_total = dual_data.get("total_count", total_live_count) if dual_data.get("is_dual_active") else total_live_count
 
     return {
         "cameras": cameras_data,
-        "total_count": total_live_count,
+        "total_count": final_total,
+        "dual_fusion": dual_data,
         # Backwards compatibility fields for cam1
         "ingest_active": cam1_buf.is_active if cam1_buf else False,
         "ingest_frames": cam1_buf.frame_count if cam1_buf else 0,
@@ -751,12 +888,9 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
         </div>
 
         <div class="controls">
-            <!-- Mode 1: Live Video Stream (getUserMedia) -->
             <button class="btn btn-start" id="startBtn" onclick="startCamera()">📹 Start Live Video Stream</button>
             <button class="btn btn-stop" id="stopBtn" onclick="stopCamera()">⏹️ Stop Stream</button>
             <button class="btn btn-switch" id="switchBtn" onclick="switchCamera()">🔄 Switch Camera (Front/Back)</button>
-
-            <!-- Mode 2: Direct Photo Capture (works on HTTP & HTTPS) -->
             <button class="btn btn-snap" onclick="document.getElementById('nativeCamInput').click()">📸 Snap Photo & Send to AI (Works Always)</button>
             <input type="file" id="nativeCamInput" accept="image/*" capture="environment" style="display: none;" onchange="handleNativeSnap(event)">
         </div>
@@ -824,7 +958,6 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
                     }}
                     
                     try {{
-                        // Attempt high quality environment camera
                         stream = await navigator.mediaDevices.getUserMedia({{
                             video: {{
                                 facingMode: {{ ideal: facingMode }},
@@ -834,7 +967,6 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
                             audio: false
                         }});
                     }} catch(e1) {{
-                        // Fallback to generic video
                         stream = await navigator.mediaDevices.getUserMedia({{
                             video: true,
                             audio: false
@@ -979,7 +1111,7 @@ async def root():
             .status-dot.live {{ background: #22c55e; animation: pulse 1.5s infinite; }}
             @keyframes pulse {{ 0%,100% {{ opacity:1 }} 50% {{ opacity:0.3 }} }}
 
-            /* ── DUAL CAMERA GRID ── */
+            /* ── MAIN CONTENT ── */
             .main-content {{
                 width: 100%;
                 max-width: 1200px;
@@ -988,6 +1120,24 @@ async def root():
                 flex-direction: column;
                 gap: 20px;
             }}
+
+            /* ── TOTAL SUMMARY CARD ── */
+            .total-banner {{
+                background: linear-gradient(135deg, #1e293b, #0f172a);
+                border: 2px solid #3b82f6;
+                border-radius: 16px;
+                padding: 20px 30px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 15px;
+            }}
+            .total-title {{ font-size: 1.1rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }}
+            .total-subtitle {{ color: #64748b; font-size: 0.85rem; margin-top: 4px; }}
+            .total-count-num {{ font-size: 3.8rem; font-weight: 900; color: #4ade80; line-height: 1; }}
+
+            /* ── DUAL CAMERA GRID ── */
             .cameras-grid {{
                 display: grid;
                 grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -1052,22 +1202,39 @@ async def root():
             }}
             .cam-count {{ font-size: 1.8rem; font-weight: 900; color: #4ade80; }}
 
-            /* ── GLOBAL TOTAL BAR ── */
-            .total-banner {{
-                background: linear-gradient(135deg, #1e293b, #0f172a);
-                border: 2px solid #3b82f6;
+            /* ── LAYER BREAKDOWN (CLEAN DETAILS CARD) ── */
+            .layer-details-card {{
+                background: #1e293b;
+                border: 1px solid #334155;
                 border-radius: 16px;
-                padding: 20px 30px;
+                padding: 18px 22px;
+                display: none;
+            }}
+            .layer-details-header {{
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                flex-wrap: wrap;
-                gap: 15px;
+                margin-bottom: 12px;
             }}
-            .total-title {{ font-size: 1.1rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }}
-            .total-count-num {{ font-size: 3.5rem; font-weight: 900; color: #4ade80; line-height: 1; }}
+            .layer-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.88rem;
+                text-align: left;
+            }}
+            .layer-table th {{
+                padding: 8px 12px;
+                border-bottom: 2px solid #334155;
+                color: #94a3b8;
+                font-weight: 600;
+            }}
+            .layer-table td {{
+                padding: 10px 12px;
+                border-bottom: 1px solid #2d3748;
+                color: #e2e8f0;
+            }}
 
-            /* ── LINKS BOX ── */
+            /* ── CONNECTION PANEL ── */
             .links-box {{
                 background: #1e293b;
                 border-radius: 14px;
@@ -1096,8 +1263,8 @@ async def root():
             <!-- TOTAL SUMMARY CARD -->
             <div class="total-banner">
                 <div>
-                    <div class="total-title">Total Visible Cartons (Live Fusion)</div>
-                    <div style="color: #64748b; font-size: 0.85rem; margin-top: 4px;">Combined count across active camera feeds</div>
+                    <div class="total-title">Total Pallet Cartons</div>
+                    <div class="total-subtitle" id="totalSubtitle">Combined count across active camera feeds</div>
                 </div>
                 <div class="total-count-num" id="totalCountNum">—</div>
             </div>
@@ -1151,9 +1318,31 @@ async def root():
 
             </div>
 
+            <!-- LAYER-WISE BREAKDOWN CARD (Clean & Compact) -->
+            <div class="layer-details-card" id="layerDetailsCard">
+                <div class="layer-details-header">
+                    <h3 style="font-size: 1rem; color: #60a5fa; display: flex; align-items: center; gap: 8px;">
+                        📊 Live Pallet Layer Breakdown (Front × Side)
+                    </h3>
+                    <span id="layerSummaryBadge" style="font-size: 0.8rem; background: #0f172a; border: 1px solid #3b82f6; color: #38bdf8; padding: 3px 10px; border-radius: 12px;">0 Layers</span>
+                </div>
+                <table class="layer-table">
+                    <thead>
+                        <tr>
+                            <th>Layer</th>
+                            <th>Front View (N1)</th>
+                            <th>Side View (N2)</th>
+                            <th>Layer Formula</th>
+                            <th style="text-align: right;">Layer Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="layerTableBody">
+                    </tbody>
+                </table>
+            </div>
+
             <!-- CONNECTION PANEL: Mobile WiFi + USB Wired -->
             <div class="links-box">
-                <!-- Tabs -->
                 <div style="display: flex; gap: 8px; margin-bottom: 12px;">
                     <button id="tabMobile" onclick="showTab('mobile')"
                         style="flex:1; padding:10px; border-radius:8px; border:none; cursor:pointer;
@@ -1188,7 +1377,6 @@ async def root():
                         USB webcam (laptop se connected) directly kisi bhi camera slot mein assign karein.
                     </div>
 
-                    <!-- Detect Button -->
                     <div class="link-row" style="margin-bottom:10px;">
                         <span style="color:#94a3b8;">Available USB Cameras:</span>
                         <button onclick="detectUsbCams()"
@@ -1200,7 +1388,6 @@ async def root():
                         "Detect Cameras" dabayein...
                     </div>
 
-                    <!-- Cam 1 USB Row -->
                     <div class="link-row" style="margin-bottom:8px; flex-wrap:nowrap; gap:8px;">
                         <label style="color:#94a3b8; font-size:0.85rem; white-space:nowrap;">📷 Camera 1 Device:</label>
                         <select id="usbDev1" style="flex:1; background:#0f172a; color:#e2e8f0; border:1px solid #334155;
@@ -1218,7 +1405,6 @@ async def root():
                                    background:#7f1d1d; color:#fca5a5; font-size:0.82rem; white-space:nowrap;">■ Stop</button>
                     </div>
 
-                    <!-- Cam 2 USB Row -->
                     <div class="link-row" style="flex-wrap:nowrap; gap:8px;">
                         <label style="color:#94a3b8; font-size:0.85rem; white-space:nowrap;">📷 Camera 2 Device:</label>
                         <select id="usbDev2" style="flex:1; background:#0f172a; color:#e2e8f0; border:1px solid #334155;
@@ -1272,9 +1458,10 @@ async def root():
                         el.style.color = '#f59e0b';
                     }} else {{
                         el.style.color = '#4ade80';
-                        el.textContent = data.cameras.map(c =>
-                            `✅ ${{c.path}} (${{c.resolution}})`
-                        ).join('  |  ');
+                        el.innerHTML = data.cameras.map(c => {{
+                            const tag = c.internal ? ' 💻 (laptop built-in)' : ' 🔌 (external USB)';
+                            return `✅ ${{c.path}} — ${{c.name}}${{tag}}`;
+                        }}).join('<br>');
                     }}
                 }} catch(e) {{
                     el.textContent = 'Error: ' + e.message;
@@ -1319,6 +1506,7 @@ async def root():
                     const data = await res.json();
                     const cameras = data.cameras || {{}};
                     const total = data.total_count || 0;
+                    const dual = data.dual_fusion || {{}};
 
                     const cam1 = cameras['cam1'] || {{}};
                     const cam2 = cameras['cam2'] || {{}};
@@ -1359,19 +1547,48 @@ async def root():
                         count2.textContent = '—';
                     }}
 
-                    // Global Total
+                    // Global Total Banner
                     const globalDot = document.getElementById('globalDot');
                     const globalText = document.getElementById('globalStatusText');
                     const totalNum = document.getElementById('totalCountNum');
+                    const totalSub = document.getElementById('totalSubtitle');
 
                     if (cam1.active || cam2.active) {{
                         globalDot.classList.add('live');
-                        globalText.textContent = (cam1.active && cam2.active) ? '2 Cameras Streaming Live' : '1 Camera Streaming Live';
+                        if (cam1.active && cam2.active) {{
+                            globalText.textContent = '2 Cameras Streaming Live (Layer Fusion Active)';
+                            totalSub.textContent = 'Calculated 3D Pallet Total (Front × Side Layer Multiplication)';
+                        }} else {{
+                            globalText.textContent = '1 Camera Streaming Live';
+                            totalSub.textContent = 'Visible carton count on active single camera';
+                        }}
                         totalNum.textContent = total;
                     }} else {{
                         globalDot.classList.remove('live');
                         globalText.textContent = 'Waiting for cameras...';
+                        totalSub.textContent = 'Combined count across active camera feeds';
                         totalNum.textContent = '—';
+                    }}
+
+                    // Layer Breakdown Details Table
+                    const layerCard = document.getElementById('layerDetailsCard');
+                    const layerTbody = document.getElementById('layerTableBody');
+                    const layerBadge = document.getElementById('layerSummaryBadge');
+
+                    if (dual.is_dual_active && dual.layers && dual.layers.length > 0) {{
+                        layerCard.style.display = 'block';
+                        layerBadge.textContent = `${{dual.layers.length}} Layers Detected`;
+                        layerTbody.innerHTML = dual.layers.map(l => `
+                            <tr>
+                                <td style="font-weight:bold; color:#60a5fa;">Layer ${{l.layer_index}}</td>
+                                <td>${{l.front_count}} cartons</td>
+                                <td>${{l.side_count}} cartons</td>
+                                <td style="color:#94a3b8;">${{l.front_count}} × ${{l.side_count}}</td>
+                                <td style="font-weight:900; color:#4ade80; text-align:right;">${{l.layer_total}}</td>
+                            </tr>
+                        `).join('');
+                    }} else {{
+                        layerCard.style.display = 'none';
                     }}
 
                 }} catch(e) {{
@@ -1387,35 +1604,33 @@ async def root():
     """
 
 
+
 if __name__ == "__main__":
-    import asyncio
+    import threading
     import uvicorn
 
-    async def _run_dual_servers():
-        http_port = int(os.getenv("PORT", "8001"))
-        https_port = int(os.getenv("HTTPS_PORT", "8443"))
-        
-        cert_file = os.path.join(os.path.dirname(__file__), "certs", "cert.pem")
-        key_file = os.path.join(os.path.dirname(__file__), "certs", "key.pem")
-        
-        servers = []
-        cfg_http = uvicorn.Config(app, host="0.0.0.0", port=http_port, log_level="info")
-        servers.append(uvicorn.Server(cfg_http).serve())
-        
+    http_port = int(os.getenv("PORT", "8001"))
+    https_port = int(os.getenv("HTTPS_PORT", "8443"))
+    
+    cert_file = os.path.join(os.path.dirname(__file__), "certs", "cert.pem")
+    key_file = os.path.join(os.path.dirname(__file__), "certs", "key.pem")
+
+    def run_https():
         if os.path.exists(cert_file) and os.path.exists(key_file):
-            cfg_https = uvicorn.Config(
+            print(f"Starting HTTPS server on https://0.0.0.0:{https_port}")
+            uvicorn.run(
                 app,
                 host="0.0.0.0",
                 port=https_port,
                 ssl_keyfile=key_file,
                 ssl_certfile=cert_file,
-                log_level="info"
+                log_level="warning",
             )
-            servers.append(uvicorn.Server(cfg_https).serve())
-            print(f"Server started on HTTP: http://0.0.0.0:{http_port} and HTTPS: https://0.0.0.0:{https_port}")
-        else:
-            print(f"Server started on HTTP: http://0.0.0.0:{http_port}")
-        
-        await asyncio.gather(*servers)
 
-    asyncio.run(_run_dual_servers())
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        https_thread = threading.Thread(target=run_https, daemon=True)
+        https_thread.start()
+
+    print(f"Starting HTTP server on http://0.0.0.0:{http_port}")
+    uvicorn.run(app, host="0.0.0.0", port=http_port, log_level="info")
+
