@@ -6,8 +6,12 @@ echo "   Vision Apps - Starting All Services"
 echo "============================================"
 echo ""
 
+# Detect host LAN IP so containers can show phone-reachable links
+export LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [ -z "$LAN_IP" ]; then export LAN_IP="127.0.0.1"; fi
+echo "[1/2] Host LAN IP: ${LAN_IP}"
+
 # Start docker compose
-echo "[1/2] Starting Docker containers..."
 docker compose up --build -d
 
 echo ""

@@ -50,7 +50,28 @@ class FrameBuffer:
     @property
     def is_active(self) -> bool:
         with self._lock:
-            return self._frame is not None
+            return self._frame is not None and (time.time() - self._timestamp < 5.0)
+
+
+def apply_transform(frame: np.ndarray, mode: str | None) -> np.ndarray:
+    """Apply an orientation correction to a frame.
+
+    Modes: none, flip_h, flip_v, rotate_90_cw, rotate_90_ccw, rotate_180.
+    """
+    if not mode or mode == "none" or frame is None:
+        return frame
+    m = str(mode).lower().strip()
+    if m in ("flip_h", "horizontal_flip", "mirror"):
+        return cv2.flip(frame, 1)
+    if m in ("flip_v", "vertical_flip"):
+        return cv2.flip(frame, 0)
+    if m in ("rotate_90_cw", "rotate_90", "cw", "90_cw", "90"):
+        return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    if m in ("rotate_90_ccw", "rotate_270", "ccw", "90_ccw", "270"):
+        return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if m in ("rotate_180", "180"):
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    return frame
 
 
 class VideoSource:

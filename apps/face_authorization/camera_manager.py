@@ -28,7 +28,20 @@ from urllib.parse import urlparse
 import cv2
 import numpy as np
 
-from streamer import FrameBuffer
+from streamer import FrameBuffer, apply_transform
+
+
+# Orientation correction applied to every captured frame (set via /camera/transform).
+_ORIENTATION_TRANSFORM: str = "none"
+
+
+def set_orientation_transform(mode: str) -> None:
+    global _ORIENTATION_TRANSFORM
+    _ORIENTATION_TRANSFORM = (mode or "none").lower()
+
+
+def _apply_orientation(frame: "np.ndarray") -> "np.ndarray":
+    return apply_transform(frame, _ORIENTATION_TRANSFORM)
 
 
 def _normalize_uri(source_type: str, uri: Union[str, int]) -> str:
@@ -95,55 +108,40 @@ def _check_host_reachable(uri: str, timeout_sec: float = 1.5) -> Tuple[bool, str
         return False, f"Network probe failed: {str(e)}"
 
 
-def list_system_cameras(max_probe: int = 6) -> List[Dict[str, Any]]:
-    """Scan and list available USB/V4L2 camera devices on the system."""
-    devices = []
+def list_system_cameras() -> List[Dict[str, Any]]:
+    """Scan and list available USB/V4L2 camera devices WITHOUT opening them.
     
-    # 1. Check /dev/video* devices on Linux
+    Reads metadata from /sys/class/video4linux so the internal laptop webcam
+    is never powered on or opened during device discovery.
+    """
+    devices = []
     v4l_paths = sorted(glob.glob("/dev/video*"))
-    probed_indices = set()
 
     for path in v4l_paths:
         try:
             idx_str = path.replace("/dev/video", "")
             if idx_str.isdigit():
                 idx = int(idx_str)
-                probed_indices.add(idx)
-                cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
-                is_open = cap.isOpened()
-                w, h = 0, 0
-                if is_open:
-                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    cap.release()
+                name = ""
+                sysfs_name = f"/sys/class/video4linux/video{idx}/name"
+                try:
+                    with open(sysfs_name, "r") as f:
+                        name = f.read().strip()
+                except OSError:
+                    name = f"Video Device ({path})"
+
+                is_internal = any(
+                    kw in name.lower() for kw in ("integrated", "internal", "webcam", "isight", "camera hub")
+                )
                 devices.append({
                     "id": path,
-                    "name": f"USB Video Device ({path})",
-                    "available": is_open,
-                    "resolution": f"{w}x{h}" if is_open else "N/A",
+                    "device_index": idx,
+                    "name": f"{name} ({path})" if name else f"Camera Device ({path})",
+                    "available": True,
+                    "internal": is_internal,
                 })
         except Exception:
             pass
-
-    # 2. Probe default integer indices if no v4l devices found
-    if not devices:
-        for idx in range(max_probe):
-            try:
-                cap = cv2.VideoCapture(idx)
-                is_open = cap.isOpened()
-                w, h = 0, 0
-                if is_open:
-                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    cap.release()
-                    devices.append({
-                        "id": str(idx),
-                        "name": f"Camera Index {idx}",
-                        "available": is_open,
-                        "resolution": f"{w}x{h}",
-                    })
-            except Exception:
-                pass
 
     return devices
 
@@ -374,11 +372,14 @@ class CameraSource:
                             self._last_error = "Frame read returned empty"
                         break
 
-                # Downscale large frames to max 720p for fast deepface inference & smooth streaming
+                # Downscale large frames to max 640p for fast real-time inference & fluid streaming
                 h, w = frame.shape[:2]
-                if w > 720:
-                    scale = 720 / w
-                    frame = cv2.resize(frame, (720, int(h * scale)), interpolation=cv2.INTER_AREA)
+                if w > 640:
+                    scale = 640 / w
+                    frame = cv2.resize(frame, (640, int(h * scale)), interpolation=cv2.INTER_AREA)
+
+                # Apply orientation correction so display + inference agree.
+                frame = _apply_orientation(frame)
 
                 self.buffer.update(frame)
                 with self._lock:
@@ -387,7 +388,8 @@ class CameraSource:
                     self._fps_frames += 1
                     self._update_fps(now)
 
-                time.sleep(delay * 0.4)
+                if is_file:
+                    time.sleep(delay)
 
             try:
                 cap.release()

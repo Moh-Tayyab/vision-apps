@@ -14,11 +14,13 @@ services:
     container_name: carton-counter
     ports:
       - "8001:8000"
+      - "8443:8443"
     environment:
       - MODEL_BACKEND=roboflow
       - ROBOFLOW_MODEL_URL=https://detect.roboflow.com/carton-counter-demo/7
       - CONF_THRESHOLD=0.36
       - PORT=8000
+      - HTTPS_PORT=8443
     env_file:
       - .env
     devices:
@@ -33,11 +35,13 @@ services:
     container_name: helmet-detection
     ports:
       - "8002:8002"
+      - "8444:8444"
     environment:
       - MODEL_BACKEND=roboflow
       - ROBOFLOW_MODEL_URL=https://detect.roboflow.com/safety-helmet-dataset-uvh1t-aavk1/1
       - CONF_THRESHOLD=0.35
       - PORT=8002
+      - HTTPS_PORT=8444
     env_file:
       - .env
     restart: unless-stopped
@@ -47,9 +51,19 @@ services:
     container_name: face-authorization
     ports:
       - "8003:8003"
+      - "8445:8445"
+    environment:
+      - LAN_IP=${LAN_IP:-}            # host LAN IP injected so /network/info shows the phone-reachable link
+      - HTTPS_PORT=8445
     volumes:
+      - ./apps/face_authorization:/app
       - face-data:/app/data          # enrolled embeddings + photos
       - face-models:/app/.deepface   # deepface model weights cache
+    devices:
+      - "/dev/video0:/dev/video0"
+      - "/dev/video1:/dev/video1"
+    group_add:
+      - "44"
     restart: unless-stopped
 
   face-auth-ui:
@@ -61,6 +75,8 @@ services:
       - "8501:8501"
     environment:
       - FASTAPI_URL=http://face-authorization:8003
+    volumes:
+      - ./apps/face_authorization:/app
     depends_on:
       - face-authorization
     restart: unless-stopped

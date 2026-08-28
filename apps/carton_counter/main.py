@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Res
 from detector import CartonDetector
 from counter import CartonCounter, CountResult
 from dual_fusion_engine import DualFusionEngine, DualFusionResult, LayerInfo
-from streamer import FrameBuffer, MobileCameraStream, mjpeg_from_buffer, websocket_stream
+from streamer import FrameBuffer, MobileCameraStream, mjpeg_from_buffer, websocket_stream, apply_transform
 import threading
 
 app = FastAPI(
@@ -34,6 +34,10 @@ app = FastAPI(
 _detector: Optional[CartonDetector] = None
 _counter: Optional[CartonCounter] = None
 _stream: Optional[MobileCameraStream] = None
+_camera_transforms: dict[str, str] = {
+    "cam1": "none",
+    "cam2": "none",
+}
 _ingest_buffers: dict[str, FrameBuffer] = {
     "cam1": FrameBuffer(max_frames=10),
     "cam2": FrameBuffer(max_frames=10),
@@ -271,6 +275,50 @@ def _read_image(file_bytes: bytes) -> np.ndarray:
     return img
 
 
+_https_started = False
+
+
+def _start_https_server():
+    global _https_started
+    if _https_started:
+        return
+    _https_started = True
+
+    cert_file = os.path.join(os.path.dirname(__file__), "certs", "cert.pem")
+    key_file = os.path.join(os.path.dirname(__file__), "certs", "key.pem")
+    https_port = int(os.getenv("HTTPS_PORT", "8443"))
+
+    if not (os.path.exists(cert_file) and os.path.exists(key_file)):
+        try:
+            os.makedirs(os.path.dirname(cert_file), exist_ok=True)
+            import subprocess
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", key_file, "-out", cert_file,
+                "-days", "365", "-nodes", "-subj", "/CN=carton-counter"
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        try:
+            import uvicorn
+            print(f"Starting Carton Counter HTTPS server on https://0.0.0.0:{https_port}")
+            config = uvicorn.Config(
+                app,
+                host="0.0.0.0",
+                port=https_port,
+                ssl_keyfile=key_file,
+                ssl_certfile=cert_file,
+                log_level="warning",
+                lifespan="off",
+            )
+            server = uvicorn.Server(config)
+            server.run()
+        except Exception as e:
+            print(f"HTTPS server error: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     try:
@@ -282,6 +330,9 @@ async def startup():
     t = threading.Thread(target=_async_detection_worker, daemon=True)
     t.start()
     print("Async background AI detection worker started.")
+
+    https_t = threading.Thread(target=_start_https_server, daemon=True)
+    https_t.start()
 
 
 def _generate_demo_images():
@@ -658,6 +709,8 @@ async def ingest_frame(
 ):
     """Accept a frame pushed from any mobile camera client immediately without latency."""
     image = _read_image(await file.read())
+    tf = _camera_transforms.get(camera_id, "none")
+    image = apply_transform(image, tf)
     buf = _get_buffer(camera_id)
     buf.update(image)
 
@@ -672,6 +725,25 @@ async def ingest_frame(
         "count": current_count,
         "size": [image.shape[1], image.shape[0]],
     }
+
+
+@app.post("/camera/transform")
+async def set_camera_transform(
+    camera_id: str = Query(default="cam1"),
+    transform: str = Query(default="none"),
+):
+    """Live-adjust orientation for a camera slot."""
+    global _camera_transforms
+    valid = ("none", "flip_h", "flip_v", "rotate_90_cw", "rotate_90_ccw", "rotate_180", "rotate_90", "rotate_270")
+    t_clean = transform.lower().strip()
+    if t_clean not in valid:
+        raise HTTPException(status_code=422, detail=f"Invalid transform '{transform}'. Must be one of: {valid}")
+    if t_clean in ("rotate_90", "90"):
+        t_clean = "rotate_90_cw"
+    elif t_clean in ("rotate_270", "270"):
+        t_clean = "rotate_90_ccw"
+    _camera_transforms[camera_id] = t_clean
+    return {"status": "ok", "camera_id": camera_id, "transform": t_clean}
 
 
 @app.get("/stream")
@@ -836,12 +908,21 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
             .live-dot {{ width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 1.5s infinite; }}
             @keyframes pulse {{ 0%, 100% {{ opacity: 1; transform: scale(1); }} 50% {{ opacity: 0.4; transform: scale(0.85); }} }}
             .controls {{ display: flex; flex-direction: column; gap: 10px; max-width: 460px; margin: 0 auto; }}
+            .snap-row {{ display: flex; gap: 8px; }}
             .btn {{ width: 100%; padding: 14px; border: none; border-radius: 12px; font-size: 1rem; font-weight: bold; cursor: pointer; transition: all 0.2s; }}
             .btn-start {{ background: linear-gradient(135deg, #22c55e, #16a34a); color: white; box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3); }}
-            .btn-snap {{ background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }}
+            .btn-snap {{ background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); font-size: 0.88rem; padding: 11px; }}
+            .btn-snap-user {{ background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3); font-size: 0.88rem; padding: 11px; }}
             .btn-stop {{ background: #ef4444; color: white; display: none; }}
-            .btn-switch {{ background: #334155; color: #e2e8f0; }}
             .btn-https {{ background: #ea580c; color: white; margin-top: 6px; }}
+            
+            .cam-toggle-group {{ display: flex; gap: 8px; max-width: 460px; margin: 0 auto 10px; }}
+            .cam-toggle-btn {{ flex: 1; padding: 10px 12px; border-radius: 10px; background: #1e293b; color: #94a3b8; border: 1.5px solid #334155; font-size: 0.85rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s; }}
+            .cam-toggle-btn.active {{ background: #0369a1; color: #fff; border-color: #38bdf8; box-shadow: 0 0 12px rgba(56, 189, 248, 0.3); }}
+
+            video {{ width: 100%; height: 100%; object-fit: cover; }}
+            video.mirror {{ transform: scaleX(-1); }}
+
             .status-box {{ background: #1e293b; border-radius: 12px; padding: 14px; margin-top: 12px; max-width: 460px; margin-left: auto; margin-right: auto; text-align: left; font-size: 0.85rem; border: 1px solid #334155; }}
             .status-row {{ display: flex; justify-content: space-between; margin-bottom: 6px; }}
             .status-label {{ color: #94a3b8; }}
@@ -871,11 +952,30 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
 
         <div id="permBanner" class="https-banner" style="display: none; background: #450a0a; border-color: #ef4444;">
             <h3 style="color: #fca5a5;">⚠️ Camera Permission Denied</h3>
-            <p style="margin-bottom: 8px;">Browser ne camera block kiya hai. Isay theek karne ke 2 tareeqe hain:</p>
+            <p style="margin-bottom: 8px;">The browser did not grant camera access. You have 2 options to proceed:</p>
             <ol style="text-align: left; padding-left: 20px; font-size: 0.8rem; line-height: 1.5; color: #fecaca;">
-                <li>Browser ke top par URL ke saath <b>🔒 (Lock icon)</b> ya <b>Tune icon</b> dabayein &rarr; <b>Permissions</b> &rarr; <b>Camera</b> ko <b>Allow</b> karein, phir page Refresh karein.</li>
-                <li><b>YA</b> neeche <b>"📸 Snap Photo & Send"</b> button dabayein (yeh direct phone camera app kholta hai bina browser permission ke).</li>
+                <li>Tap the <b>🔒 Lock / Tune icon</b> next to the URL &rarr; <b>Permissions</b> &rarr; Set <b>Camera: Allow</b>, then refresh.</li>
+                <li><b>OR</b> tap <b>"📸 Snap Back"</b> or <b>"🤳 Snap Front"</b> below (opens native camera without permission restrictions).</li>
             </ol>
+        </div>
+
+        <!-- Camera Type Selection (Front vs Back) -->
+        <div class="cam-toggle-group">
+            <button class="cam-toggle-btn active" id="btnCamBack" onclick="selectCameraMode('environment')">
+                📷 Back Camera (Main)
+            </button>
+            <button class="cam-toggle-btn" id="btnCamFront" onclick="selectCameraMode('user')">
+                🤳 Front Camera (Selfie)
+            </button>
+        </div>
+
+        <!-- Orientation Rotation Controls -->
+        <div class="rot-group" style="display: flex; gap: 6px; max-width: 460px; margin: 0 auto 10px;">
+            <button class="rot-btn active" id="rot-none" onclick="setOrientation('none')" style="flex:1; padding:8px; border-radius:8px; background:#1e293b; color:#94a3b8; border:1px solid #334155; font-size:0.78rem; cursor:pointer;">Normal</button>
+            <button class="rot-btn" id="rot-cw" onclick="setOrientation('rotate_90_cw')" style="flex:1; padding:8px; border-radius:8px; background:#1e293b; color:#94a3b8; border:1px solid #334155; font-size:0.78rem; cursor:pointer;">🔄 90° CW</button>
+            <button class="rot-btn" id="rot-ccw" onclick="setOrientation('rotate_90_ccw')" style="flex:1; padding:8px; border-radius:8px; background:#1e293b; color:#94a3b8; border:1px solid #334155; font-size:0.78rem; cursor:pointer;">🔄 90° CCW</button>
+            <button class="rot-btn" id="rot-180" onclick="setOrientation('rotate_180')" style="flex:1; padding:8px; border-radius:8px; background:#1e293b; color:#94a3b8; border:1px solid #334155; font-size:0.78rem; cursor:pointer;">🔄 180°</button>
+            <button class="rot-btn" id="rot-fliph" onclick="setOrientation('flip_h')" style="flex:1; padding:8px; border-radius:8px; background:#1e293b; color:#94a3b8; border:1px solid #334155; font-size:0.78rem; cursor:pointer;">🪞 Flip</button>
         </div>
 
         <div class="camera-container">
@@ -890,12 +990,20 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
         <div class="controls">
             <button class="btn btn-start" id="startBtn" onclick="startCamera()">📹 Start Live Video Stream</button>
             <button class="btn btn-stop" id="stopBtn" onclick="stopCamera()">⏹️ Stop Stream</button>
-            <button class="btn btn-switch" id="switchBtn" onclick="switchCamera()">🔄 Switch Camera (Front/Back)</button>
-            <button class="btn btn-snap" onclick="document.getElementById('nativeCamInput').click()">📸 Snap Photo & Send to AI (Works Always)</button>
-            <input type="file" id="nativeCamInput" accept="image/*" capture="environment" style="display: none;" onchange="handleNativeSnap(event)">
+            
+            <div class="snap-row">
+                <button class="btn btn-snap" style="flex:1;" onclick="document.getElementById('nativeCamBack').click()">📸 Snap Back Photo</button>
+                <button class="btn btn-snap-user" style="flex:1;" onclick="document.getElementById('nativeCamFront').click()">🤳 Snap Front Selfie</button>
+            </div>
+            <input type="file" id="nativeCamBack" accept="image/*" capture="environment" style="display: none;" onchange="handleNativeSnap(event)">
+            <input type="file" id="nativeCamFront" accept="image/*" capture="user" style="display: none;" onchange="handleNativeSnap(event)">
         </div>
 
         <div class="status-box">
+            <div class="status-row">
+                <span class="status-label">Active Camera Lens:</span>
+                <span class="status-value" id="activeCamText" style="color: #38bdf8;">Back Camera (Main)</span>
+            </div>
             <div class="status-row">
                 <span class="status-label">Active Camera Slot:</span>
                 <span class="status-value" id="currentSlotText" style="color: #60a5fa;">{cam.upper()}</span>
@@ -935,6 +1043,40 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
                 window.location.href = url.toString();
             }}
 
+            async function selectCameraMode(mode) {{
+                facingMode = mode;
+                document.getElementById('btnCamBack').classList.toggle('active', mode === 'environment');
+                document.getElementById('btnCamFront').classList.toggle('active', mode === 'user');
+                document.getElementById('activeCamText').textContent = mode === 'user' ? 'Front Camera (Selfie)' : 'Back Camera (Main)';
+
+                if (mode === 'user') {{
+                    video.classList.add('mirror');
+                }} else {{
+                    video.classList.remove('mirror');
+                }}
+
+                if (stream) {{
+                    await startCamera();
+                }}
+            }}
+
+            async function setOrientation(mode) {{
+                document.querySelectorAll('.rot-btn').forEach(b => {{
+                    b.style.background = '#1e293b';
+                    b.style.color = '#94a3b8';
+                    b.style.borderColor = '#334155';
+                }});
+                const btn = document.getElementById('rot-' + (mode === 'rotate_90_cw' ? 'cw' : mode === 'rotate_90_ccw' ? 'ccw' : mode === 'rotate_180' ? '180' : mode === 'flip_h' ? 'fliph' : 'none'));
+                if (btn) {{
+                    btn.style.background = '#3b82f6';
+                    btn.style.color = 'white';
+                    btn.style.borderColor = '#60a5fa';
+                }}
+                try {{
+                    await fetch('/camera/transform?camera_id=' + encodeURIComponent(activeCam) + '&transform=' + encodeURIComponent(mode), {{ method: 'POST' }});
+                }} catch(e) {{}}
+            }}
+
             window.onload = function() {{
                 if (window.location.protocol === 'http:' && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)) {{
                     document.getElementById('httpsBanner').style.display = 'block';
@@ -955,22 +1097,35 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
                 try {{
                     if (stream) {{
                         stream.getTracks().forEach(t => t.stop());
+                        stream = null;
                     }}
+                    video.srcObject = null;
                     
                     try {{
                         stream = await navigator.mediaDevices.getUserMedia({{
                             video: {{
-                                facingMode: {{ ideal: facingMode }},
+                                facingMode: {{ exact: facingMode }},
                                 width: {{ ideal: 1280 }},
                                 height: {{ ideal: 720 }}
                             }},
                             audio: false
                         }});
-                    }} catch(e1) {{
-                        stream = await navigator.mediaDevices.getUserMedia({{
-                            video: true,
-                            audio: false
-                        }});
+                    }} catch(eExact) {{
+                        try {{
+                            stream = await navigator.mediaDevices.getUserMedia({{
+                                video: {{
+                                    facingMode: {{ ideal: facingMode }},
+                                    width: {{ ideal: 1280 }},
+                                    height: {{ ideal: 720 }}
+                                }},
+                                audio: false
+                            }});
+                        }} catch(eIdeal) {{
+                            stream = await navigator.mediaDevices.getUserMedia({{
+                                video: true,
+                                audio: false
+                            }});
+                        }}
                     }}
 
                     video.style.display = 'block';
@@ -1018,11 +1173,21 @@ async def mobile_camera_page(cam: str = Query(default="cam1")):
 
             let isSending = false;
             function sendFrame() {{
-                if (!video.videoWidth || isSending) return;
+                if (!video.videoWidth || isSending || !stream) return;
                 canvas.width = Math.min(video.videoWidth, 640);
                 canvas.height = Math.min(video.videoHeight, 480);
                 let ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                if (facingMode === 'user') {{
+                    ctx.save();
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+                }} else {{
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                }}
+
                 isSending = true;
                 canvas.toBlob(blob => {{
                     if (!blob) {{ isSending = false; return; }}
@@ -1367,14 +1532,14 @@ async def root():
                         <a class="link-val" href="/mobile?cam=cam2" target="_blank">/mobile?cam=cam2</a>
                     </div>
                     <div style="margin-top:10px; font-size:0.8rem; color:#64748b;">
-                        ✅ Dono mobile par link kholein → "Start Live Video Stream" dabayein
+                        ✅ Open link on both mobile phones → tap "Start Live Video Stream"
                     </div>
                 </div>
 
                 <!-- USB Wired Tab -->
                 <div id="panelUsb" style="display:none;">
                     <div style="font-size:0.85rem; color:#94a3b8; margin-bottom:12px;">
-                        USB webcam (laptop se connected) directly kisi bhi camera slot mein assign karein.
+                        Assign USB webcams (connected to the computer) directly to camera slots.
                     </div>
 
                     <div class="link-row" style="margin-bottom:10px;">
@@ -1385,7 +1550,7 @@ async def root():
                     </div>
                     <div id="usbCamList" style="background:#0f172a; border-radius:8px; padding:10px; font-size:0.82rem;
                         color:#64748b; margin-bottom:12px; min-height:36px;">
-                        "Detect Cameras" dabayein...
+                        Click "Detect Cameras"...
                     </div>
 
                     <div class="link-row" style="margin-bottom:8px; flex-wrap:nowrap; gap:8px;">
@@ -1454,7 +1619,7 @@ async def root():
                     const res = await fetch('/usb/cameras');
                     const data = await res.json();
                     if (data.cameras.length === 0) {{
-                        el.textContent = '⚠️ Koi USB camera nahi mila. Cable check karein.';
+                        el.textContent = '⚠️ No USB cameras detected. Please check cables.';
                         el.style.color = '#f59e0b';
                     }} else {{
                         el.style.color = '#4ade80';
@@ -1606,31 +1771,9 @@ async def root():
 
 
 if __name__ == "__main__":
-    import threading
     import uvicorn
 
     http_port = int(os.getenv("PORT", "8001"))
-    https_port = int(os.getenv("HTTPS_PORT", "8443"))
-    
-    cert_file = os.path.join(os.path.dirname(__file__), "certs", "cert.pem")
-    key_file = os.path.join(os.path.dirname(__file__), "certs", "key.pem")
-
-    def run_https():
-        if os.path.exists(cert_file) and os.path.exists(key_file):
-            print(f"Starting HTTPS server on https://0.0.0.0:{https_port}")
-            uvicorn.run(
-                app,
-                host="0.0.0.0",
-                port=https_port,
-                ssl_keyfile=key_file,
-                ssl_certfile=cert_file,
-                log_level="warning",
-            )
-
-    if os.path.exists(cert_file) and os.path.exists(key_file):
-        https_thread = threading.Thread(target=run_https, daemon=True)
-        https_thread.start()
-
-    print(f"Starting HTTP server on http://0.0.0.0:{http_port}")
+    print(f"Starting Carton Counter HTTP server on http://0.0.0.0:{http_port}")
     uvicorn.run(app, host="0.0.0.0", port=http_port, log_level="info")
 

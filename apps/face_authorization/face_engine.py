@@ -96,6 +96,13 @@ class FaceEngine:
         if not new_embeddings:
             raise ValueError(f"No face found in any of the {len(images)} image(s)")
 
+        # Persist enrollment photo to data/photos/<name>/photo.jpg
+        if images:
+            person_dir = os.path.join(self._photos_dir, name)
+            os.makedirs(person_dir, exist_ok=True)
+            photo_file = os.path.join(person_dir, "photo.jpg")
+            cv2.imwrite(photo_file, images[0])
+
         with self._lock:
             existing = self._persons.get(name, {"embeddings": []})
             existing["embeddings"].extend(new_embeddings)
@@ -108,12 +115,24 @@ class FaceEngine:
             "total_embeddings": len(existing["embeddings"]),
         }
 
+    def get_person_photo_path(self, name: str) -> Optional[str]:
+        """Return absolute path to person's enrollment photo if present."""
+        person_dir = os.path.join(self._photos_dir, name)
+        photo_file = os.path.join(person_dir, "photo.jpg")
+        if os.path.exists(photo_file):
+            return photo_file
+        return None
+
     def remove(self, name: str) -> bool:
         with self._lock:
             if name not in self._persons:
                 return False
             del self._persons[name]
             self._save()
+
+        person_dir = os.path.join(self._photos_dir, name)
+        if os.path.exists(person_dir):
+            shutil.rmtree(person_dir, ignore_errors=True)
         return True
 
     def list_persons(self) -> List[dict]:
