@@ -17,7 +17,7 @@ import numpy as np
 class FrameBuffer:
     """Thread-safe latest-frame store for pushed camera frames."""
 
-    def __init__(self, max_frames: int = 10):
+    def __init__(self, max_frames: int = 3):
         self._lock = threading.Lock()
         self._frame: Optional[np.ndarray] = None
         self._timestamp: float = 0.0
@@ -74,7 +74,7 @@ def apply_transform(frame: np.ndarray, mode: str | None) -> np.ndarray:
 
 def mjpeg_from_buffer(
     buffer: FrameBuffer,
-    quality: int = 75,
+    quality: int = 60,
     transform=None,
     fps_limit: float = 30.0,
 ) -> Generator[bytes, None, None]:
@@ -86,12 +86,12 @@ def mjpeg_from_buffer(
     while True:
         result = buffer.get_latest()
         if result is None:
-            time.sleep(0.04)
+            time.sleep(0.005)
             continue
 
         ts, frame = result
         if ts == last_seen_ts:
-            time.sleep(0.015)
+            time.sleep(0.002)
             continue
 
         last_seen_ts = ts

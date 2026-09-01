@@ -24,6 +24,7 @@ import requests
 PERSON_CLASSES = {"person", "worker", "man", "woman", "human"}
 HELMET_CLASSES = {"helmet", "hardhat", "hard hat", "hard-hat", "with_helmet", "with helmet", "safety helmet", "safety_helmet"}
 HEAD_CLASSES = {"head", "bare head", "bare_head", "no-helmet", "no_helmet", "without_helmet", "without helmet", "no helmet", "no-hardhat", "no_hardhat", "no hardhat"}
+CAP_CLASSES = {"cap", "hat", "baseball cap", "baseball_cap", "sun cap", "sports cap", "baseball-hat", "baseball_hat"}
 
 
 @dataclass
@@ -204,6 +205,7 @@ class HelmetDetector:
 
         helmets = [b for b in raw if b.class_name in HELMET_CLASSES]
         heads = [b for b in raw if b.class_name in HEAD_CLASSES]
+        caps = [b for b in raw if b.class_name in CAP_CLASSES]
 
         persons: List[PersonStatus] = []
         for b in raw:
@@ -211,9 +213,21 @@ class HelmetDetector:
                 continue
             has_helmet = any(b.contains(h) for h in helmets)
             has_head = any(b.contains(hd) for hd in heads)
+            has_cap = any(b.contains(c) for c in caps)
+
             if has_helmet:
-                status = "helmet"
-            elif has_head:
+                # Check if detected "helmet" is actually a cap (size heuristic)
+                helmet_box = next(h for h in helmets if b.contains(h))
+                person_area = (b.x2 - b.x1) * (b.y2 - b.y1)
+                helmet_area = (helmet_box.x2 - helmet_box.x1) * (helmet_box.y2 - helmet_box.y1)
+                helmet_ratio = helmet_area / person_area if person_area > 0 else 0
+
+                # If helmet box is very small relative to person (< 3%), likely a cap not a helmet
+                if helmet_ratio < 0.03:
+                    status = "no_helmet"
+                else:
+                    status = "helmet"
+            elif has_head or has_cap:
                 status = "no_helmet"
             else:
                 status = "no_helmet" if (helmets or heads) else "unknown"

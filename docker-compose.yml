@@ -44,6 +44,11 @@ services:
       - HTTPS_PORT=8444
     env_file:
       - .env
+    devices:
+      - "/dev/video0:/dev/video0"
+      - "/dev/video1:/dev/video1"
+    group_add:
+      - "44"
     restart: unless-stopped
 
   face-authorization:
@@ -79,6 +84,19 @@ services:
       - ./apps/face_authorization:/app
     depends_on:
       - face-authorization
+    restart: unless-stopped
+
+  pallet-counter:
+    build: ./apps/pallet_counter
+    container_name: pallet-counter
+    ports:
+      - "8004:8004"
+    environment:
+      - ROBOFLOW_MODEL_URL=https://detect.roboflow.com/carton-counter-demo/7
+      - CONF_THRESHOLD=0.36
+      - PORT=8004
+    env_file:
+      - .env
     restart: unless-stopped
 
 volumes:
