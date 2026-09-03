@@ -50,8 +50,8 @@ class CartonStateMachine:
 
     def __init__(
         self,
-        occlusion_timeout: int = 30,
-        removal_timeout: int = 15,
+        occlusion_timeout: int = 8,
+        removal_timeout: int = 8,
         hand_proximity_threshold: float = 100.0,
     ):
         self.tracks: Dict[int, CartonTrack] = {}
@@ -109,6 +109,7 @@ class CartonStateMachine:
                     track.hand_nearby_frames += 1
                     if track.state == CartonState.PRESENT:
                         track.state = CartonState.BEING_PICKED
+                        track.picked_by_hand = True
                         track.last_state_change = current_time
                 else:
                     track.hand_nearby_frames = max(0, track.hand_nearby_frames - 1)
@@ -147,6 +148,7 @@ class CartonStateMachine:
                     )
                     if hand_near:
                         track.state = CartonState.BEING_PICKED
+                        track.picked_by_hand = True
                         track.last_state_change = current_time
                     elif track.occluded_frames > self.occlusion_timeout:
                         track.state = CartonState.REMOVED
@@ -201,13 +203,21 @@ class CartonStateMachine:
                     confidence=detected_confidences[track_id],
                 )
 
+        # Cleanup removed tracks that are older than 5 seconds
+        for tid in list(self.tracks.keys()):
+            t = self.tracks[tid]
+            if t.state == CartonState.REMOVED and (current_time - t.last_state_change > 5.0):
+                del self.tracks[tid]
+
         return events
 
-    def get_active_cartons(self) -> List[CartonTrack]:
-        """Get all cartons not yet removed."""
+    def get_active_cartons(self, include_occluded: bool = False) -> List[CartonTrack]:
+        """Get all cartons actively present or being picked (excludes occluded unless requested)."""
+        if include_occluded:
+            return [t for t in self.tracks.values() if t.state != CartonState.REMOVED]
         return [
             t for t in self.tracks.values()
-            if t.state != CartonState.REMOVED
+            if t.state in (CartonState.PRESENT, CartonState.BEING_PICKED)
         ]
 
     def get_cartons_by_state(self, state: CartonState) -> List[CartonTrack]:
@@ -217,7 +227,7 @@ class CartonStateMachine:
     def get_layer_counts(self) -> Dict[int, int]:
         """Count active cartons per layer."""
         counts = {}
-        for track in self.get_active_cartons():
+        for track in self.get_active_cartons(include_occluded=False):
             counts[track.layer] = counts.get(track.layer, 0) + 1
         return counts
 

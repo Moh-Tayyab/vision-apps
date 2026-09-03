@@ -25,19 +25,34 @@ class Track:
         x1, y1, x2, y2 = self.bbox
         return ((x1 + x2) / 2, (y1 + y2) / 2)
 
+    def smooth_bbox(self, alpha: float = 0.6) -> Tuple[float, float, float, float]:
+        """Return smoothed bounding box over recent history."""
+        if not self.history:
+            return self.bbox
+        recent = self.history[-4:]
+        weights = [alpha ** i for i in range(len(recent))][::-1]
+        w_sum = sum(weights)
+        norm_weights = [w / w_sum for w in weights]
+
+        x1 = sum(r[0] * w for r, w in zip(recent, norm_weights))
+        y1 = sum(r[1] * w for r, w in zip(recent, norm_weights))
+        x2 = sum(r[2] * w for r, w in zip(recent, norm_weights))
+        y2 = sum(r[3] * w for r, w in zip(recent, norm_weights))
+        return (x1, y1, x2, y2)
+
 
 class ByteTracker:
     """Simplified ByteTrack-inspired tracker.
 
     Assigns unique IDs to detected objects and maintains tracks across frames.
-    Uses IoU-based matching for simplicity.
+    Uses IoU-based matching with coordinate smoothing.
     """
 
     def __init__(
         self,
-        max_age: int = 30,
-        min_hits: int = 3,
-        iou_threshold: float = 0.3,
+        max_age: int = 12,
+        min_hits: int = 2,
+        iou_threshold: float = 0.25,
     ):
         self.max_age = max_age
         self.min_hits = min_hits
@@ -55,9 +70,9 @@ class ByteTracker:
         x2 = min(box1[2], box2[2])
         y2 = min(box1[3], box2[3])
 
-        inter = max(0, x2 - x1) * max(0, y2 - y1)
-        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        area1 = max(0.0, box1[2] - box1[0]) * max(0.0, box1[3] - box1[1])
+        area2 = max(0.0, box2[2] - box2[0]) * max(0.0, box2[3] - box2[1])
         union = area1 + area2 - inter
 
         return inter / union if union > 0 else 0.0
@@ -78,7 +93,14 @@ class ByteTracker:
         unmatched_dets = list(range(len(detections)))
         unmatched_tracks = list(self.tracks.keys())
 
-        for det_idx in range(len(detections)):
+        # Sort detections by confidence
+        sorted_det_indices = sorted(
+            range(len(detections)),
+            key=lambda i: detections[i][4] if len(detections[i]) > 4 else 0.0,
+            reverse=True
+        )
+
+        for det_idx in sorted_det_indices:
             best_iou = 0.0
             best_track_id = None
             for track_id in unmatched_tracks:
@@ -89,21 +111,24 @@ class ByteTracker:
                 if iou > best_iou:
                     best_iou = iou
                     best_track_id = track_id
+
             if best_iou >= self.iou_threshold and best_track_id is not None:
                 matched.append((det_idx, best_track_id))
-                unmatched_dets.remove(det_idx)
+                if det_idx in unmatched_dets:
+                    unmatched_dets.remove(det_idx)
                 unmatched_tracks.remove(best_track_id)
 
         # Update matched tracks
         for det_idx, track_id in matched:
             track = self.tracks[track_id]
-            track.bbox = detections[det_idx][:4]
+            raw_box = detections[det_idx][:4]
             track.confidence = detections[det_idx][4]
             track.hits += 1
             track.time_since_update = 0
-            track.history.append(track.bbox)
-            if len(track.history) > 50:
+            track.history.append(raw_box)
+            if len(track.history) > 30:
                 track.history.pop(0)
+            track.bbox = track.smooth_bbox()
 
         # Update unmatched tracks (age them)
         for track_id in unmatched_tracks:
@@ -132,7 +157,7 @@ class ByteTracker:
         # Return active tracks with enough hits
         return [
             t for t in self.tracks.values()
-            if t.hits >= self.min_hits
+            if t.hits >= self.min_hits and t.time_since_update == 0
         ]
 
     def get_all_tracks(self) -> List[Track]:

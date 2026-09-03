@@ -1,0 +1,3252 @@
+{
+  "raw_full_evaluation": {
+    "confidence_threshold": 0.36,
+    "top_row_only": false,
+    "total_images": 15,
+    "total_gt_cartons": 85,
+    "total_pred_cartons": 242,
+    "precision": 0.3017,
+    "recall": 0.8588,
+    "f1_score": 0.4465,
+    "mean_iou_matched": 0.901,
+    "counting_mae": 10.47,
+    "counting_rmse": 11.15,
+    "exact_count_accuracy_pct": 0.0,
+    "within_1_count_accuracy_pct": 6.67,
+    "within_2_count_accuracy_pct": 6.67,
+    "by_split": {
+      "test": {
+        "gt_cartons": 2,
+        "pred_cartons": 16,
+        "tp": 2,
+        "fp": 14,
+        "fn": 0,
+        "precision": 0.125,
+        "recall": 1.0,
+        "f1_score": 0.2222,
+        "mae": 14.0
+      },
+      "valid": {
+        "gt_cartons": 9,
+        "pred_cartons": 29,
+        "tp": 6,
+        "fp": 23,
+        "fn": 3,
+        "precision": 0.2069,
+        "recall": 0.6667,
+        "f1_score": 0.3158,
+        "mae": 10.0
+      },
+      "train": {
+        "gt_cartons": 74,
+        "pred_cartons": 197,
+        "tp": 65,
+        "fp": 132,
+        "fn": 9,
+        "precision": 0.3299,
+        "recall": 0.8784,
+        "f1_score": 0.4797,
+        "mae": 10.25
+      }
+    },
+    "per_image": [
+      {
+        "split": "test",
+        "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+        "gt_count": 2,
+        "pred_count": 16,
+        "tp": 2,
+        "fp": 14,
+        "fn": 0,
+        "mean_iou": 0.9643
+      },
+      {
+        "split": "valid",
+        "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+        "gt_count": 6,
+        "pred_count": 12,
+        "tp": 3,
+        "fp": 9,
+        "fn": 3,
+        "mean_iou": 0.9522
+      },
+      {
+        "split": "valid",
+        "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+        "gt_count": 3,
+        "pred_count": 17,
+        "tp": 3,
+        "fp": 14,
+        "fn": 0,
+        "mean_iou": 0.9464
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+        "gt_count": 7,
+        "pred_count": 18,
+        "tp": 7,
+        "fp": 11,
+        "fn": 0,
+        "mean_iou": 0.9624
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+        "gt_count": 9,
+        "pred_count": 10,
+        "tp": 9,
+        "fp": 1,
+        "fn": 0,
+        "mean_iou": 0.9178
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+        "gt_count": 9,
+        "pred_count": 15,
+        "tp": 8,
+        "fp": 7,
+        "fn": 1,
+        "mean_iou": 0.9005
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+        "gt_count": 8,
+        "pred_count": 16,
+        "tp": 8,
+        "fp": 8,
+        "fn": 0,
+        "mean_iou": 0.906
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+        "gt_count": 7,
+        "pred_count": 15,
+        "tp": 6,
+        "fp": 9,
+        "fn": 1,
+        "mean_iou": 0.9425
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+        "gt_count": 4,
+        "pred_count": 15,
+        "tp": 4,
+        "fp": 11,
+        "fn": 0,
+        "mean_iou": 0.8602
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+        "gt_count": 7,
+        "pred_count": 22,
+        "tp": 4,
+        "fp": 18,
+        "fn": 3,
+        "mean_iou": 0.8361
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+        "gt_count": 6,
+        "pred_count": 20,
+        "tp": 4,
+        "fp": 16,
+        "fn": 2,
+        "mean_iou": 0.7505
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+        "gt_count": 5,
+        "pred_count": 19,
+        "tp": 3,
+        "fp": 16,
+        "fn": 2,
+        "mean_iou": 0.6863
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+        "gt_count": 5,
+        "pred_count": 18,
+        "tp": 5,
+        "fp": 13,
+        "fn": 0,
+        "mean_iou": 0.9305
+      },
+      {
+        "split": "train",
+        "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+        "gt_count": 5,
+        "pred_count": 15,
+        "tp": 5,
+        "fp": 10,
+        "fn": 0,
+        "mean_iou": 0.9451
+      },
+      {
+        "split": "train",
+        "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+        "gt_count": 2,
+        "pred_count": 14,
+        "tp": 2,
+        "fp": 12,
+        "fn": 0,
+        "mean_iou": 0.9091
+      }
+    ]
+  },
+  "top_row_filtered_evaluation": {
+    "confidence_threshold": 0.36,
+    "top_row_only": true,
+    "total_images": 15,
+    "total_gt_cartons": 85,
+    "total_pred_cartons": 36,
+    "precision": 0.6667,
+    "recall": 0.2824,
+    "f1_score": 0.3967,
+    "mean_iou_matched": 0.9349,
+    "counting_mae": 3.8,
+    "counting_rmse": 4.36,
+    "exact_count_accuracy_pct": 0.0,
+    "within_1_count_accuracy_pct": 13.33,
+    "within_2_count_accuracy_pct": 40.0,
+    "by_split": {
+      "test": {
+        "gt_cartons": 2,
+        "pred_cartons": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 1,
+        "precision": 1.0,
+        "recall": 0.5,
+        "f1_score": 0.6667,
+        "mae": 1.0
+      },
+      "valid": {
+        "gt_cartons": 9,
+        "pred_cartons": 9,
+        "tp": 5,
+        "fp": 4,
+        "fn": 4,
+        "precision": 0.5556,
+        "recall": 0.5556,
+        "f1_score": 0.5556,
+        "mae": 2.0
+      },
+      "train": {
+        "gt_cartons": 74,
+        "pred_cartons": 26,
+        "tp": 18,
+        "fp": 8,
+        "fn": 56,
+        "precision": 0.6923,
+        "recall": 0.2432,
+        "f1_score": 0.36,
+        "mae": 4.33
+      }
+    },
+    "per_image": [
+      {
+        "split": "test",
+        "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+        "gt_count": 2,
+        "pred_count": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 1,
+        "mean_iou": 0.9653
+      },
+      {
+        "split": "valid",
+        "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+        "gt_count": 6,
+        "pred_count": 4,
+        "tp": 3,
+        "fp": 1,
+        "fn": 3,
+        "mean_iou": 0.9522
+      },
+      {
+        "split": "valid",
+        "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+        "gt_count": 3,
+        "pred_count": 5,
+        "tp": 2,
+        "fp": 3,
+        "fn": 1,
+        "mean_iou": 0.9404
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+        "gt_count": 7,
+        "pred_count": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 6,
+        "mean_iou": 0.9717
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+        "gt_count": 9,
+        "pred_count": 4,
+        "tp": 4,
+        "fp": 0,
+        "fn": 5,
+        "mean_iou": 0.8823
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+        "gt_count": 9,
+        "pred_count": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 8,
+        "mean_iou": 0.9772
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+        "gt_count": 8,
+        "pred_count": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 7,
+        "mean_iou": 0.9712
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+        "gt_count": 7,
+        "pred_count": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 6,
+        "mean_iou": 0.9679
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+        "gt_count": 4,
+        "pred_count": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 3,
+        "mean_iou": 0.9635
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+        "gt_count": 7,
+        "pred_count": 3,
+        "tp": 2,
+        "fp": 1,
+        "fn": 5,
+        "mean_iou": 0.9345
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+        "gt_count": 6,
+        "pred_count": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 5,
+        "mean_iou": 0.9648
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+        "gt_count": 5,
+        "pred_count": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 4,
+        "mean_iou": 0.9577
+      },
+      {
+        "split": "train",
+        "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+        "gt_count": 5,
+        "pred_count": 4,
+        "tp": 3,
+        "fp": 1,
+        "fn": 2,
+        "mean_iou": 0.9147
+      },
+      {
+        "split": "train",
+        "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+        "gt_count": 5,
+        "pred_count": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 5,
+        "mean_iou": 0.0
+      },
+      {
+        "split": "train",
+        "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+        "gt_count": 2,
+        "pred_count": 4,
+        "tp": 2,
+        "fp": 2,
+        "fn": 0,
+        "mean_iou": 0.9091
+      }
+    ]
+  },
+  "confidence_sweep": [
+    {
+      "confidence_threshold": 0.1,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 37,
+      "precision": 0.6486,
+      "recall": 0.2824,
+      "f1_score": 0.3934,
+      "mean_iou_matched": 0.9258,
+      "counting_mae": 3.73,
+      "counting_rmse": 4.31,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 27,
+          "tp": 18,
+          "fp": 9,
+          "fn": 56,
+          "precision": 0.6667,
+          "recall": 0.2432,
+          "f1_score": 0.3564,
+          "mae": 4.25
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.8793
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 0,
+          "fp": 2,
+          "fn": 5,
+          "mean_iou": 0.0
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.15,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 36,
+      "precision": 0.6667,
+      "recall": 0.2824,
+      "f1_score": 0.3967,
+      "mean_iou_matched": 0.9258,
+      "counting_mae": 3.8,
+      "counting_rmse": 4.36,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 26,
+          "tp": 18,
+          "fp": 8,
+          "fn": 56,
+          "precision": 0.6923,
+          "recall": 0.2432,
+          "f1_score": 0.36,
+          "mae": 4.33
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.8793
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 0,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.0
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.2,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 37,
+      "precision": 0.6486,
+      "recall": 0.2824,
+      "f1_score": 0.3934,
+      "mean_iou_matched": 0.9258,
+      "counting_mae": 3.73,
+      "counting_rmse": 4.31,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 27,
+          "tp": 18,
+          "fp": 9,
+          "fn": 56,
+          "precision": 0.6667,
+          "recall": 0.2432,
+          "f1_score": 0.3564,
+          "mae": 4.25
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.8793
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 0,
+          "fp": 2,
+          "fn": 5,
+          "mean_iou": 0.0
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.25,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 36,
+      "precision": 0.6667,
+      "recall": 0.2824,
+      "f1_score": 0.3967,
+      "mean_iou_matched": 0.9349,
+      "counting_mae": 3.8,
+      "counting_rmse": 4.36,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 26,
+          "tp": 18,
+          "fp": 8,
+          "fn": 56,
+          "precision": 0.6923,
+          "recall": 0.2432,
+          "f1_score": 0.36,
+          "mae": 4.33
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 0,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.0
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.3,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 36,
+      "precision": 0.6667,
+      "recall": 0.2824,
+      "f1_score": 0.3967,
+      "mean_iou_matched": 0.9349,
+      "counting_mae": 3.8,
+      "counting_rmse": 4.36,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 26,
+          "tp": 18,
+          "fp": 8,
+          "fn": 56,
+          "precision": 0.6923,
+          "recall": 0.2432,
+          "f1_score": 0.36,
+          "mae": 4.33
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 0,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.0
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.35,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 36,
+      "precision": 0.6667,
+      "recall": 0.2824,
+      "f1_score": 0.3967,
+      "mean_iou_matched": 0.9349,
+      "counting_mae": 3.8,
+      "counting_rmse": 4.36,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 26,
+          "tp": 18,
+          "fp": 8,
+          "fn": 56,
+          "precision": 0.6923,
+          "recall": 0.2432,
+          "f1_score": 0.36,
+          "mae": 4.33
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 0,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.0
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.36,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 36,
+      "precision": 0.6667,
+      "recall": 0.2824,
+      "f1_score": 0.3967,
+      "mean_iou_matched": 0.9349,
+      "counting_mae": 3.8,
+      "counting_rmse": 4.36,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 26,
+          "tp": 18,
+          "fp": 8,
+          "fn": 56,
+          "precision": 0.6923,
+          "recall": 0.2432,
+          "f1_score": 0.36,
+          "mae": 4.33
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 0,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.0
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.4,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 36,
+      "precision": 0.7222,
+      "recall": 0.3059,
+      "f1_score": 0.4298,
+      "mean_iou_matched": 0.9196,
+      "counting_mae": 3.8,
+      "counting_rmse": 4.36,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 13.33,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 26,
+          "tp": 20,
+          "fp": 6,
+          "fn": 54,
+          "precision": 0.7692,
+          "recall": 0.2703,
+          "f1_score": 0.4,
+          "mae": 4.33
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 3,
+          "mean_iou": 0.741
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.9485
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.45,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 35,
+      "precision": 0.7429,
+      "recall": 0.3059,
+      "f1_score": 0.4333,
+      "mean_iou_matched": 0.9196,
+      "counting_mae": 3.73,
+      "counting_rmse": 4.34,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 20.0,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 9,
+          "tp": 5,
+          "fp": 4,
+          "fn": 4,
+          "precision": 0.5556,
+          "recall": 0.5556,
+          "f1_score": 0.5556,
+          "mae": 2.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 25,
+          "tp": 20,
+          "fp": 5,
+          "fn": 54,
+          "precision": 0.8,
+          "recall": 0.2703,
+          "f1_score": 0.404,
+          "mae": 4.25
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 5,
+          "tp": 2,
+          "fp": 3,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 3,
+          "mean_iou": 0.741
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.9485
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.5,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 34,
+      "precision": 0.7647,
+      "recall": 0.3059,
+      "f1_score": 0.437,
+      "mean_iou_matched": 0.9196,
+      "counting_mae": 3.67,
+      "counting_rmse": 4.31,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 26.67,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 8,
+          "tp": 5,
+          "fp": 3,
+          "fn": 4,
+          "precision": 0.625,
+          "recall": 0.5556,
+          "f1_score": 0.5882,
+          "mae": 1.5
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 25,
+          "tp": 20,
+          "fp": 5,
+          "fn": 54,
+          "precision": 0.8,
+          "recall": 0.2703,
+          "f1_score": 0.404,
+          "mae": 4.25
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 3,
+          "mean_iou": 0.741
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.9485
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.55,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 34,
+      "precision": 0.7647,
+      "recall": 0.3059,
+      "f1_score": 0.437,
+      "mean_iou_matched": 0.9196,
+      "counting_mae": 3.67,
+      "counting_rmse": 4.31,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 26.67,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 8,
+          "tp": 5,
+          "fp": 3,
+          "fn": 4,
+          "precision": 0.625,
+          "recall": 0.5556,
+          "f1_score": 0.5882,
+          "mae": 1.5
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 25,
+          "tp": 20,
+          "fp": 5,
+          "fn": 54,
+          "precision": 0.8,
+          "recall": 0.2703,
+          "f1_score": 0.404,
+          "mae": 4.25
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 4,
+          "tp": 2,
+          "fp": 2,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9345
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.9648
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 3,
+          "mean_iou": 0.741
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9147
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.9485
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.6,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 33,
+      "precision": 0.8485,
+      "recall": 0.3294,
+      "f1_score": 0.4746,
+      "mean_iou_matched": 0.8939,
+      "counting_mae": 3.6,
+      "counting_rmse": 4.31,
+      "exact_count_accuracy_pct": 6.67,
+      "within_1_count_accuracy_pct": 26.67,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 7,
+          "tp": 5,
+          "fp": 2,
+          "fn": 4,
+          "precision": 0.7143,
+          "recall": 0.5556,
+          "f1_score": 0.625,
+          "mae": 1.0
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 25,
+          "tp": 22,
+          "fp": 3,
+          "fn": 52,
+          "precision": 0.88,
+          "recall": 0.2973,
+          "f1_score": 0.4444,
+          "mae": 4.25
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 3,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.8066
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.7496
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 3,
+          "mean_iou": 0.741
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.9264
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.9485
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 0,
+          "mean_iou": 0.9091
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.7,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 30,
+      "precision": 0.8667,
+      "recall": 0.3059,
+      "f1_score": 0.4522,
+      "mean_iou_matched": 0.8928,
+      "counting_mae": 3.67,
+      "counting_rmse": 4.33,
+      "exact_count_accuracy_pct": 6.67,
+      "within_1_count_accuracy_pct": 20.0,
+      "within_2_count_accuracy_pct": 40.0,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 6,
+          "tp": 5,
+          "fp": 1,
+          "fn": 4,
+          "precision": 0.8333,
+          "recall": 0.5556,
+          "f1_score": 0.6667,
+          "mae": 1.5
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 23,
+          "tp": 20,
+          "fp": 3,
+          "fn": 54,
+          "precision": 0.8696,
+          "recall": 0.2703,
+          "f1_score": 0.4124,
+          "mae": 4.25
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9717
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8823
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 7,
+          "mean_iou": 0.9712
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9679
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 3,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.8066
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.7496
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 3,
+          "mean_iou": 0.741
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 3,
+          "tp": 3,
+          "fp": 0,
+          "fn": 2,
+          "mean_iou": 0.9264
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.9485
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 2,
+          "tp": 0,
+          "fp": 2,
+          "fn": 2,
+          "mean_iou": 0.0
+        }
+      ]
+    },
+    {
+      "confidence_threshold": 0.8,
+      "top_row_only": true,
+      "total_images": 15,
+      "total_gt_cartons": 85,
+      "total_pred_cartons": 34,
+      "precision": 0.8235,
+      "recall": 0.3294,
+      "f1_score": 0.4706,
+      "mean_iou_matched": 0.917,
+      "counting_mae": 3.4,
+      "counting_rmse": 3.96,
+      "exact_count_accuracy_pct": 0.0,
+      "within_1_count_accuracy_pct": 20.0,
+      "within_2_count_accuracy_pct": 46.67,
+      "by_split": {
+        "test": {
+          "gt_cartons": 2,
+          "pred_cartons": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1_score": 0.6667,
+          "mae": 1.0
+        },
+        "valid": {
+          "gt_cartons": 9,
+          "pred_cartons": 6,
+          "tp": 5,
+          "fp": 1,
+          "fn": 4,
+          "precision": 0.8333,
+          "recall": 0.5556,
+          "f1_score": 0.6667,
+          "mae": 1.5
+        },
+        "train": {
+          "gt_cartons": 74,
+          "pred_cartons": 27,
+          "tp": 22,
+          "fp": 5,
+          "fn": 52,
+          "precision": 0.8148,
+          "recall": 0.2973,
+          "f1_score": 0.4356,
+          "mae": 3.92
+        }
+      },
+      "per_image": [
+        {
+          "split": "test",
+          "image": "images-11-_jpeg.rf.d9b3b2f63c740f73fca352ced4e566bc.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9653
+        },
+        {
+          "split": "valid",
+          "image": "brown-cardboard-boxes-labels-including-priority-shipping-handling-instructions-stacked-neatly-wooden-pallet-425941897_webp.rf.5797f6540ee4bffb95f07e06bdc082c3.jpg",
+          "gt_count": 6,
+          "pred_count": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9522
+        },
+        {
+          "split": "valid",
+          "image": "loading-shipment-carton-boxes-goods-wooden-pallet-dock-container-194667896_webp.rf.e9304d4a19671f25fbcf63c0213ff8c3.jpg",
+          "gt_count": 3,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 1,
+          "mean_iou": 0.9404
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-17-59-32_png.rf.59e7d63c7dfa0244b81ac15c25635388.jpg",
+          "gt_count": 7,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.9636
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-00-08_png.rf.be23e0d07f797964be33d570222448ba.jpg",
+          "gt_count": 9,
+          "pred_count": 4,
+          "tp": 4,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.8948
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-01-33_png.rf.1adb9a85e761de9867099b2ca7580ff8.jpg",
+          "gt_count": 9,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 8,
+          "mean_iou": 0.9772
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-05-33_png.rf.583d95bf148cfef1646d4b7c79e3b1e5.jpg",
+          "gt_count": 8,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 6,
+          "mean_iou": 0.9444
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-02_png.rf.7f35bf090017efce7a78532aaead1ee7.jpg",
+          "gt_count": 7,
+          "pred_count": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 5,
+          "mean_iou": 0.9559
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-06-47_png.rf.476faa22d498efa3796ababef434faf3.jpg",
+          "gt_count": 4,
+          "pred_count": 2,
+          "tp": 1,
+          "fp": 1,
+          "fn": 3,
+          "mean_iou": 0.9635
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-07-55_png.rf.9c5272f5a0b01fbdba5d77be78c458cc.jpg",
+          "gt_count": 7,
+          "pred_count": 3,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "mean_iou": 0.7525
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-09_png.rf.68e67815f5dc9b00634bedae8f408dea.jpg",
+          "gt_count": 6,
+          "pred_count": 3,
+          "tp": 3,
+          "fp": 0,
+          "fn": 3,
+          "mean_iou": 0.8162
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-09-33_png.rf.8860da36eec75cdd497df4f65ef1f7fd.jpg",
+          "gt_count": 5,
+          "pred_count": 3,
+          "tp": 1,
+          "fp": 2,
+          "fn": 4,
+          "mean_iou": 0.9577
+        },
+        {
+          "split": "train",
+          "image": "Screenshot-from-2026-09-01-18-10-12_png.rf.3f5d01b08626e7a7db38a489d32915df.jpg",
+          "gt_count": 5,
+          "pred_count": 3,
+          "tp": 3,
+          "fp": 0,
+          "fn": 2,
+          "mean_iou": 0.9552
+        },
+        {
+          "split": "train",
+          "image": "download_png.rf.86a496860b64af347a3becf194ed47f1.jpg",
+          "gt_count": 5,
+          "pred_count": 1,
+          "tp": 1,
+          "fp": 0,
+          "fn": 4,
+          "mean_iou": 0.9485
+        },
+        {
+          "split": "train",
+          "image": "open-box-truck-with-pallet-of-stacked-cardboard-boxes-2J4324F_jpg.rf.13cc381ccf5d0dfbcfea58020edacd87.jpg",
+          "gt_count": 2,
+          "pred_count": 1,
+          "tp": 0,
+          "fp": 1,
+          "fn": 2,
+          "mean_iou": 0.0
+        }
+      ]
+    }
+  ]
+}

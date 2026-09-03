@@ -14,9 +14,10 @@ import numpy as np
 
 try:
     import mediapipe as mp
-    HAS_MEDIAPIPE = True
-except ImportError:
+    HAS_MEDIAPIPE = hasattr(mp, 'solutions')
+except (ImportError, Exception):
     HAS_MEDIAPIPE = False
+    mp = None
 
 
 @dataclass
@@ -32,8 +33,9 @@ class HandDetection:
 class WorkerDetector:
     """Detects worker hands and pose for pick event detection."""
 
-    def __init__(self, use_hands: bool = True):
+    def __init__(self, use_hands: bool = True, pallet_roi=None):
         self.use_hands = use_hands and HAS_MEDIAPIPE
+        self.pallet_roi = pallet_roi
 
         if not HAS_MEDIAPIPE:
             print("Warning: MediaPipe not available, worker detection disabled")
@@ -106,7 +108,12 @@ class WorkerDetector:
         self, hands: List[HandDetection]
     ) -> bool:
         """Check if any hand is in the pallet ROI area."""
-        # This will be configured by the live_counter with actual ROI
+        if not self.pallet_roi or not hands:
+            return False
+        for hand in hands:
+            hx, hy = hand.position
+            if self.pallet_roi.contains(hx, hy):
+                return True
         return False
 
     def get_hand_velocity(self) -> Optional[Tuple[float, float]]:
