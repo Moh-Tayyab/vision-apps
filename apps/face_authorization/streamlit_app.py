@@ -25,6 +25,7 @@ from PIL import Image
 # Configuration
 # ---------------------------------------------------------------------------
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:8003")
+API_KEY = os.getenv("FACE_AUTH_API_KEY", "face-auth-dev-key-2026")
 
 st.set_page_config(
     page_title="Face Authorization — Admin",
@@ -39,10 +40,13 @@ st.set_page_config(
 
 
 def _api(path: str, method: str = "GET", **kwargs) -> requests.Response:
-    """Make a request to the FastAPI backend with timeout."""
+    """Make a request to the FastAPI backend with timeout and auth headers."""
     url = f"{FASTAPI_URL}{path}"
+    headers = kwargs.pop("headers", {})
+    if "X-API-Key" not in headers:
+        headers["X-API-Key"] = API_KEY
     try:
-        resp = requests.request(method, url, timeout=30, **kwargs)
+        resp = requests.request(method, url, timeout=30, headers=headers, **kwargs)
         return resp
     except requests.ConnectionError:
         st.error(f"Cannot connect to FastAPI backend at {FASTAPI_URL}")
@@ -66,6 +70,28 @@ def _load_events(limit: int = 50) -> list:
     if resp.status_code == 200:
         return resp.json().get("events", [])
     return []
+
+
+def _load_audit_events_db(limit: int = 50, offset: int = 0, status: str = None, search_name: str = None) -> tuple:
+    """Fetch persistent audit logs from database."""
+    params = f"?limit={limit}&offset={offset}"
+    if status and status.lower() != "all":
+        params += f"&status={status.lower()}"
+    if search_name and search_name.strip():
+        params += f"&name={search_name.strip()}"
+    resp = _api(f"/audit/events{params}")
+    if resp.status_code == 200:
+        d = resp.json()
+        return d.get("total", 0), d.get("events", [])
+    return 0, []
+
+
+def _get_db_stats() -> dict:
+    """Fetch database & Qdrant vector engine statistics."""
+    resp = _api("/db/stats")
+    if resp.status_code == 200:
+        return resp.json()
+    return {}
 
 
 def _get_photo_url(name: str) -> str:
@@ -97,6 +123,25 @@ def _get_camera_health() -> dict:
     return {}
 
 
+def _get_sensitivity_settings() -> dict:
+    """Get current sensitivity and distance settings."""
+    resp = _api("/settings/sensitivity")
+    if resp.status_code == 200:
+        return resp.json()
+    return {
+        "min_face_size": 14,
+        "detection_confidence": 0.22,
+        "cosine_match_threshold": 0.48,
+        "inference_max_width": 720,
+    }
+
+
+def _update_sensitivity_settings(**kwargs) -> bool:
+    """Update sensitivity settings."""
+    resp = _api("/settings/sensitivity", method="POST", data=kwargs)
+    return resp.status_code == 200
+
+
 ORIENTATION_TRANSFORMS = ["none", "flip_h", "flip_v", "rotate_90_cw", "rotate_90_ccw", "rotate_180"]
 
 
@@ -124,7 +169,7 @@ with st.sidebar:
         st.success("Backend: Online")
         st.metric("Enrolled Persons", health.get("enrolled_persons", 0))
         if health.get("model_loaded"):
-            st.caption("Model: Loaded")
+            st.caption("Model: Loaded (Facenet)")
         else:
             st.warning("Model: Initializing...")
 
@@ -136,13 +181,16 @@ with st.sidebar:
             st.warning("Camera: Connecting...")
         else:
             st.info(f"Camera: {cam_status.capitalize()}")
+
+        sens = _get_sensitivity_settings()
+        st.caption(f"🎯 Sensitivity: Threshold `{sens.get('cosine_match_threshold', 0.48)}` | Min Face `{sens.get('min_face_size', 14)}px`")
     else:
         st.error("Backend: Offline")
 
     st.divider()
     page = st.radio(
         "Navigate",
-        ["Dashboard", "Enroll User", "Manage Users", "Live Detection"],
+        ["Dashboard", "Enroll User", "Manage Users", "Live Detection", "Audit Logs & Security"],
         label_visibility="collapsed",
     )
 
@@ -153,18 +201,25 @@ if page == "Dashboard":
     st.header("Dashboard")
 
     persons = _load_persons()
-    events = _load_events(limit=100)
+    db_stats = _get_db_stats()
 
     # Stats cards
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Persons", len(persons))
     with col2:
-        total_embs = sum(p.get("num_embeddings", 0) for p in persons)
-        st.metric("Total Embeddings", total_embs)
+        st.metric("Total Embeddings", db_stats.get("total_embeddings", 0))
     with col3:
-        unauth = sum(1 for e in events if e.get("status") == "unauthorized")
-        st.metric("Unauthorized Events", unauth)
+        st.metric("Access Violations", db_stats.get("total_violations", 0))
+    with col4:
+        st.metric("Spoof Attacks Blocked", db_stats.get("total_spoofs_detected", 0))
+
+    # Vector Engine Status Banner
+    q_active = db_stats.get("qdrant_active", False)
+    if q_active:
+        st.success(f"🚀 **Vector Search Engine: Qdrant Active** (HNSW Cosine Index at `{db_stats.get('qdrant_url')}`)")
+    else:
+        st.info("📦 **Vector Search Engine: SQLite WAL + NumPy Embedded Active** (Zero-latency local index)")
 
     # Enrolled persons table
     st.subheader("Enrolled Persons")
@@ -462,6 +517,75 @@ elif page == "Live Detection":
             unsafe_allow_html=True,
         )
 
+        # Sensitivity & Distance Controls
+        with st.expander("🎯 **Sensitivity & Distance Tuning (Door Khare Chehron ke Liye)**", expanded=False):
+            curr_sens = _get_sensitivity_settings()
+            st.caption("Adjust sensitivity to recognize faces from greater distances without standing close to camera.")
+            
+            p_col1, p_col2, p_col3 = st.columns(3)
+            with p_col1:
+                if st.button("🔭 **Long-Distance Mode**\n\n(High Sensitivity)", use_container_width=True):
+                    _update_sensitivity_settings(preset="long_distance")
+                    st.toast("Preset set to Long-Distance Mode (High Sensitivity)!")
+                    time.sleep(0.3)
+                    st.rerun()
+            with p_col2:
+                if st.button("⚖️ **Balanced Mode**\n\n(Standard / Default)", use_container_width=True):
+                    _update_sensitivity_settings(preset="balanced")
+                    st.toast("Preset set to Balanced Mode!")
+                    time.sleep(0.3)
+                    st.rerun()
+            with p_col3:
+                if st.button("🔒 **Strict Mode**\n\n(Close-up / High Security)", use_container_width=True):
+                    _update_sensitivity_settings(preset="strict")
+                    st.toast("Preset set to Strict Mode!")
+                    time.sleep(0.3)
+                    st.rerun()
+
+            st.markdown("---")
+            st.markdown("##### Fine-Tune Parameters:")
+            sc1, sc2, sc3 = st.columns(3)
+            with sc1:
+                new_thresh = st.slider(
+                    "Cosine Match Threshold (Higher = more lenient)",
+                    min_value=0.25,
+                    max_value=0.65,
+                    value=float(curr_sens.get("cosine_match_threshold", 0.48)),
+                    step=0.01,
+                    help="Cosine distance limit. 0.48-0.52 allows faces to match from a distance even if slightly lower res.",
+                )
+            with sc2:
+                new_min_size = st.slider(
+                    "Min Face Size (px) (Lower = detects far faces)",
+                    min_value=10,
+                    max_value=60,
+                    value=int(curr_sens.get("min_face_size", 14)),
+                    step=1,
+                    help="Minimum pixel dimension of face bounding box. 14px allows detection across the room.",
+                )
+            with sc3:
+                new_conf = st.slider(
+                    "Detection Confidence (Lower = catches distant faces)",
+                    min_value=0.10,
+                    max_value=0.70,
+                    value=float(curr_sens.get("detection_confidence", 0.22)),
+                    step=0.01,
+                    help="RetinaFace confidence filter. 0.20-0.25 catches smaller faces reliably.",
+                )
+
+            if st.button("💾 Apply Custom Sensitivity", type="primary"):
+                ok = _update_sensitivity_settings(
+                    cosine_match_threshold=new_thresh,
+                    min_face_size=new_min_size,
+                    detection_confidence=new_conf,
+                )
+                if ok:
+                    st.success("Sensitivity settings updated successfully!")
+                    time.sleep(0.3)
+                    st.rerun()
+                else:
+                    st.error("Failed to update sensitivity settings.")
+
     # --- Tab 2: In-Browser Webcam Capture ---
     with tab2:
         st.subheader("In-Browser Webcam Quick Check")
@@ -537,3 +661,60 @@ elif page == "Live Detection":
                                 st.json(face)
                 else:
                     st.error(f"Verification failed: {resp.text}")
+
+# ---------------------------------------------------------------------------
+# Page: Audit Logs & Security
+# ---------------------------------------------------------------------------
+elif page == "Audit Logs & Security":
+    st.header("Security & Audit Logs")
+    st.caption("Persistent tamper-proof database access logs and vector search monitoring.")
+
+    db_stats = _get_db_stats()
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Total Logged Events", db_stats.get("total_audit_events", 0))
+    with c2:
+        st.metric("Violations Logged", db_stats.get("total_violations", 0))
+    with c3:
+        st.metric("Spoofing Attempts", db_stats.get("total_spoofs_detected", 0))
+    with c4:
+        st.metric("Vector Store", "Qdrant HNSW" if db_stats.get("qdrant_active") else "SQLite+NumPy")
+
+    st.divider()
+
+    # Filter Controls
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+    with col_f1:
+        filter_status = st.selectbox("Filter Status", ["All", "authorized", "unauthorized", "spoof"])
+    with col_f2:
+        search_name = st.text_input("Search by Name", placeholder="e.g. Tayyab")
+    with col_f3:
+        page_limit = st.selectbox("Rows per page", [25, 50, 100], index=1)
+
+    total_evs, events_data = _load_audit_events_db(
+        limit=page_limit,
+        status=filter_status,
+        search_name=search_name,
+    )
+
+    st.subheader(f"Audit Trail ({total_evs} matching events)")
+
+    if events_data:
+        df = pd.DataFrame(events_data)
+        if "timestamp" in df.columns:
+            df["time"] = pd.to_datetime(df["timestamp"], unit="s").dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        display_cols = [c for c in ["id", "time", "camera_id", "status", "matched_name", "confidence", "distance", "liveness_score"] if c in df.columns]
+        st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
+    else:
+        st.info("No audit records matching your criteria.")
+
+    st.divider()
+    st.subheader("Production Monitoring (Prometheus Metrics)")
+    st.caption("Scrape URL: `http://localhost:8003/metrics` for Prometheus / Grafana integration.")
+    if st.button("📊 View Live Prometheus Metrics"):
+        resp = _api("/metrics")
+        if resp.status_code == 200:
+            st.code(resp.text, language="promql")
+        else:
+            st.error(f"Failed to fetch metrics: {resp.text}")

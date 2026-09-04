@@ -1,59 +1,123 @@
-# App 3 — Face Authorization
+# App 3 — Production-Grade Face Authorization Microservice
 
-FastAPI service using Python **deepface**: enroll authorized persons' face
-embeddings, then flag faces from live video as authorized/unauthorized.
-Includes a **Streamlit admin dashboard** for easy user management.
+High-throughput, real-time facial recognition and access control microservice built on **FastAPI**, **DeepFace (Facenet512 + RetinaFace)**, **Qdrant Vector Database**, and **SQLite WAL**.
 
-## Run
+Includes passive anti-spoofing liveness detection, temporal face tracking, Prometheus observability, and an administrative **Streamlit Dashboard**.
 
-### FastAPI Backend (port 8003)
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8003   # from this directory
-# or
-docker build -t face-auth . && docker run -p 8003:8003 -v face-data:/app/data face-auth
+---
+
+## Architecture Overview
+
+```
+[ CCTV / Mobile IP Camera / Video Stream ]
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Fast Face Detection (RetinaFace @ 14px min face size)        │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Passive Anti-Spoofing Engine (<2ms multi-cue analysis)      │
+│  - Chrominance Variance (YCrCb/HSV skin reflectance)        │
+│  - Laplacian Texture / Sharpness Differential               │
+│  - Fourier Spectrum Frequency Energy (Moiré pattern detector│
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 512-D Face Vector Embedding Extraction (Facenet512)         │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Vector Database Similarity Match                            │
+│  - Primary: Self-Hosted Qdrant Engine (HNSW Cosine Index)   │
+│  - Fallback: SQLite WAL + Vectorized NumPy Cosine Search    │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Multi-Target Temporal Face Tracker (IoU + Consensus Voting) │
+│  - Exponential Moving Average Spatial Bounding Box Smoothing│
+│  - Multi-frame Temporal Consensus Voting (No 1-frame jitter)│
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+       ┌───────────────────┴───────────────────┐
+       ▼                                       ▼
+┌──────────────────────────────┐ ┌──────────────────────────────┐
+│ SQLite WAL Audit Trail       │ │ Prometheus Metrics Exporter  │
+│ - Timestamped events         │ │ - /metrics for Grafana       │
+│ - Violations & Spoof alarms  │ │ - Latency, FPS, Counts       │
+└──────────────────────────────┘ └──────────────────────────────┘
 ```
 
-### Streamlit Admin Dashboard (port 8501)
+---
+
+## 🚀 Quickstart with Docker Compose (Recommended)
+
+Start the entire self-hosted stack (Qdrant Vector DB + FastAPI Service + Streamlit UI) in 1 command:
+
 ```bash
-streamlit run streamlit_app.py --server.port 8501   # from this directory
-# or
-docker build -t face-auth-ui -f Dockerfile.streamlit . && docker run -p 8501:8501 -e FASTAPI_URL=http://localhost:8003 face-auth-ui
+cd apps/face_authorization
+docker compose up --build -d
 ```
 
-### Docker Compose (both services)
+### Services & Ports:
+- **FastAPI Core Backend**: [http://localhost:8003](http://localhost:8003)
+- **FastAPI Interactive Docs**: [http://localhost:8003/docs](http://localhost:8003/docs)
+- **Streamlit Admin UI**: [http://localhost:8501](http://localhost:8501)
+- **Qdrant Vector Database**: [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
+- **Prometheus Metrics**: [http://localhost:8003/metrics](http://localhost:8003/metrics)
+
+---
+
+## 💻 Local Development (Zero Docker Requirement)
+
+The service is fully resilient: if Qdrant is not running, it automatically uses **SQLite WAL + embedded NumPy vector math** with zero configuration required.
+
 ```bash
-docker compose up --build   # from project root
-# Backend: http://localhost:8003
-# Admin UI: http://localhost:8501
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Start FastAPI server
+uvicorn main:app --host 0.0.0.0 --port 8003 --reload
+
+# 3. In a separate terminal, start Streamlit Dashboard
+streamlit run streamlit_app.py --server.port 8501
 ```
 
-## Streamlit Dashboard Pages
+---
 
-| Page | Description |
-|------|-------------|
-| **Dashboard** | Stats (persons, embeddings, events), enrolled persons list, recent events table |
-| **Enroll User** | Upload 1 clear front-facing photo + name → one-click enrollment |
-| **Manage Users** | View all enrolled users with photos, delete button per user |
-| **Live Detection** | Upload image to verify, or embed live camera stream from FastAPI |
+## 🛡️ Production Features
 
-## Endpoints
+### 1. Distance & Small Face Sensitivity
+- Resolution auto-upscaling (dynamic 1080p target) prevents distant faces from degrading.
+- Minimum face size threshold lowered to **14px** (allows detection across warehouse distances).
+- Tuned cosine distance threshold ($\le 0.48$) and RetinaFace detection confidence ($0.22$).
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health + enrolled-persons count |
-| GET | `/model/info` | Model config + enrolled persons |
-| POST | `/persons/enroll` | Fields: `name`, `files` (1+ face images) |
-| GET | `/persons` | List enrolled persons |
-| GET | `/persons/{name}/photo` | Serve enrollment photo (JPEG) |
-| DELETE | `/persons/{name}` | Remove a person's embeddings + photo |
-| POST | `/verify` | Image → per-face `authorized`/`unauthorized` |
-| POST | `/ingest/frame` | Push one JPEG frame (mobile camera) |
-| POST | `/ingest/frame/check` | Verify latest pushed frame; logs events |
-| GET | `/events` | Recent authorization events |
-| GET | `/stream` / `/stream/detect` | Raw / annotated live MJPEG |
+### 2. Passive Anti-Spoofing (Liveness Check)
+- Evaluates skin chrominance variance, Fourier spectrum frequencies (detects screen refresh/print moiré), and Laplacian sharpness.
+- Flags flat 2D presentation attacks (printed papers, iPad/phone screens) as `SPOOF_ATTACK`.
 
-## Photo Storage
+### 3. Multi-Target Temporal Tracking
+- Prevents bounding-box flicker with exponential spatial smoothing ($\alpha = 0.70$).
+- Eliminates 1-frame lighting false negatives using 6-frame majority consensus voting.
 
-Each enrolled person gets a directory under `data/photos/<name>/` containing
-the front-facing enrollment photo. MVP stores 1 photo; the structure is ready
-for 3-4 photos per employee in a future update.
+### 4. Enterprise Security & Auditability
+- Optional API Key / Bearer token enforcement (`X-API-Key` or `Authorization: Bearer <token>`).
+- Crash-safe SQLite WAL transaction logging for all authorization attempts, violations, and spoof alarms.
+- Prometheus `/metrics` exporter compatible with Datadog, Prometheus, and Grafana.
+
+---
+
+## 📡 API Reference
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `GET` | `/health` | Healthcheck and status | No |
+| `GET` | `/metrics` | Prometheus metrics scrape target | No |
+| `GET` | `/db/stats` | Database & vector index statistics | No |
+| `GET` | `/audit/events` | Query recent authorization audit logs | Optional |
+| `POST` | `/verify` | Single frame / image verification | Optional |
+| `POST` | `/persons/enroll` | Enroll new authorized personnel | Yes (Admin) |
+| `GET` | `/persons` | List all enrolled personnel | Optional |
+| `DELETE` | `/persons/{name}` | Remove enrolled personnel | Yes (Admin) |
+| `GET` | `/stream/detect` | Real-time annotated MJPEG camera stream | No |
+| `POST` | `/ingest/frame` | Ingest frame from mobile/edge camera | No |

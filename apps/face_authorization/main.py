@@ -1,11 +1,16 @@
-"""FastAPI app: Authorized/Unauthorized Person Detection (App 3).
+"""FastAPI app: Authorized/Unauthorized Person Detection & Security Gate (App 3).
 
-Enroll authorized persons' face embeddings (deepface), then compare faces
-from live video frames (USB camera, Mobile IP, or Web push).
+Enterprise-Grade Computer Vision Microservice:
+- Passive Anti-Spoofing & Liveness Detection (blocks screen/paper presentation attacks).
+- SQLite WAL + Qdrant Vector persistence.
+- Multi-target temporal tracking with consensus classification.
+- Prometheus /metrics exporter and persistent audit logs.
+- API Key / RBAC security on administrative endpoints.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import threading
@@ -15,33 +20,45 @@ from typing import List, Optional
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 
+from anti_spoof import AntiSpoofEngine
 from camera_manager import CameraHealth, CameraManager, list_system_cameras
 from face_engine import COSINE_THRESHOLD, DETECTOR_BACKEND, FaceEngine
+from metrics import metrics
+from security import verify_admin_access
 from streamer import FrameBuffer, MobileCameraStream, apply_transform
+from tracker import FaceTracker
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("face_auth.main")
 
 app = FastAPI(
     title="Face Authorization",
-    description="Authorized vs unauthorized person detection using deepface embeddings",
-    version="1.0.0",
+    description="Enterprise-grade face recognition & access authorization with anti-spoofing and vector search",
+    version="2.0.0",
 )
 
 DATA_DIR = os.getenv("DATA_DIR", "data")
-STORE_PATH = os.path.join(DATA_DIR, "embeddings.json")
+DB_PATH = os.path.join(DATA_DIR, "face_auth.db")
 
-# Unified live-stream state (matches carton_counter App 1). When active, the
-# MobileCameraStream buffer is the single source of truth for both display and
-# inference so every app's "connect mobile" flow behaves identically.
+# Core Engine Singletons
 _engine: Optional[FaceEngine] = None
 _camera_manager: Optional[CameraManager] = None
 _mobile_stream: Optional[MobileCameraStream] = None
+_anti_spoof: Optional[AntiSpoofEngine] = None
+_tracker: Optional[FaceTracker] = None
 _events_log: deque = deque(maxlen=300)
 
 # Orientation correction applied at capture time so display + inference agree.
-# none | flip_h | flip_v | rotate_90_cw | rotate_90_ccw | rotate_180
 _CAMERA_TRANSFORM: str = os.getenv("CAMERA_TRANSFORM", "none")
+
+# Sensitivity & Detection Parameters
+MIN_FACE_SIZE: int = int(os.getenv("MIN_FACE_SIZE", "14"))
+DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.22"))
+COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.48"))
+INFERENCE_MAX_WIDTH: int = int(os.getenv("INFERENCE_MAX_WIDTH", "720"))
 
 # Detection Cache & Async Inference
 _detection_lock = threading.Lock()
@@ -54,8 +71,22 @@ _inference_thread: Optional[threading.Thread] = None
 def _get_engine() -> FaceEngine:
     global _engine
     if _engine is None:
-        _engine = FaceEngine(STORE_PATH)
+        _engine = FaceEngine(DB_PATH, threshold=COSINE_MATCH_THRESHOLD)
     return _engine
+
+
+def _get_anti_spoof() -> AntiSpoofEngine:
+    global _anti_spoof
+    if _anti_spoof is None:
+        _anti_spoof = AntiSpoofEngine()
+    return _anti_spoof
+
+
+def _get_tracker() -> FaceTracker:
+    global _tracker
+    if _tracker is None:
+        _tracker = FaceTracker()
+    return _tracker
 
 
 def _get_camera_manager() -> CameraManager:
@@ -71,23 +102,14 @@ def frame_transform(frame: np.ndarray) -> np.ndarray:
 
 
 def _get_active_buffer() -> FrameBuffer:
-    """Return the live FrameBuffer being used for display + inference.
-
-    Prefers the unified MobileCameraStream (App 1 method) when it is running,
-    otherwise falls back to the CameraManager source (http_mjpeg/usb/rtsp/mobile push).
-    """
+    """Return the live FrameBuffer being used for display + inference."""
     if _mobile_stream is not None and _mobile_stream.is_active:
         return _mobile_stream.buffer
     return _get_camera_manager().camera.buffer
 
 
 def _get_local_ip() -> str:
-    """LAN IP discovery for mobile instructions.
-
-    Prefers the LAN_IP env var (injected by docker-compose from the host) because
-    the socket-trick inside a bridged container only returns the bridge IP
-    (e.g. 172.19.0.x), which the phone cannot reach.
-    """
+    """LAN IP discovery for mobile instructions."""
     lan = os.getenv("LAN_IP", "").strip()
     if lan:
         return lan
@@ -109,8 +131,16 @@ def _read_image(file_bytes: bytes) -> np.ndarray:
     return img
 
 
-def _verify_frame(image: np.ndarray, log_events: bool = True) -> dict:
-    """Detect faces in the frame and match each against stored embeddings."""
+def _verify_frame(
+    image: np.ndarray,
+    log_events: bool = True,
+    min_face_size: Optional[int] = None,
+    confidence_thresh: Optional[float] = None,
+    cosine_thresh: Optional[float] = None,
+    check_liveness: bool = True,
+) -> dict:
+    """Pipeline: Detection -> Passive Liveness -> Vector Search -> Temporal Tracking -> DB Audit."""
+    start_t = time.time()
     try:
         from deepface import DeepFace
     except ImportError as e:
@@ -119,14 +149,17 @@ def _verify_frame(image: np.ndarray, log_events: bool = True) -> dict:
             detail=f"deepface/tensorflow not available in this environment: {e}",
         )
 
+    min_size = min_face_size if min_face_size is not None else MIN_FACE_SIZE
+    min_conf = confidence_thresh if confidence_thresh is not None else DETECTION_CONFIDENCE
+    eff_cosine = cosine_thresh if cosine_thresh is not None else COSINE_MATCH_THRESHOLD
+
     h, w = image.shape[:2]
     infer_img = image
     scale_x = 1.0
     scale_y = 1.0
-    # Downscale for ultra-fast deepface inference
-    if w > 480:
-        infer_w = 480
-        infer_h = int(h * (480 / w))
+    if w > INFERENCE_MAX_WIDTH:
+        infer_w = INFERENCE_MAX_WIDTH
+        infer_h = int(h * (INFERENCE_MAX_WIDTH / w))
         infer_img = cv2.resize(image, (infer_w, infer_h), interpolation=cv2.INTER_AREA)
         scale_x = w / infer_w
         scale_y = h / infer_h
@@ -141,8 +174,10 @@ def _verify_frame(image: np.ndarray, log_events: bool = True) -> dict:
     except Exception:
         faces = []
 
-    results = []
+    raw_detections = []
     now = time.time()
+    anti_spoof = _get_anti_spoof()
+    engine = _get_engine()
 
     for i, face in enumerate(faces):
         facial_area = face.get("facial_area", {})
@@ -151,39 +186,83 @@ def _verify_frame(image: np.ndarray, log_events: bool = True) -> dict:
         fw = int(facial_area.get("w", 0) * scale_x)
         fh = int(facial_area.get("h", 0) * scale_y)
         confidence = float(face.get("confidence", 0.0))
-        if fw < 30 or fh < 30 or confidence < 0.45:
+        if fw < min_size or fh < min_size or confidence < min_conf:
             continue
-        match = _get_engine().identify_face(face["face"])
+
+        face_crop = face["face"]
+
+        # Step 1: Passive Liveness & Anti-Spoofing Check
+        liveness_res = anti_spoof.check_liveness(face_crop) if check_liveness else None
+        is_live = liveness_res.is_real if liveness_res else True
+        liveness_score = liveness_res.liveness_score if liveness_res else 1.0
+
         entry = {
             "bbox": [x, y, x + fw, y + fh],
             "confidence": round(confidence, 3),
+            "liveness_score": liveness_score,
+            "is_live": is_live,
         }
-        if match is None:
-            entry.update(status="unknown", reason="no enrolled persons")
-        else:
-            entry["matched_name"] = match["name"]
-            entry["distance"] = match["distance"]
-            entry["status"] = "authorized" if match["authorized"] else "unauthorized"
-        results.append(entry)
 
-        if log_events and entry["status"] in ("authorized", "unauthorized"):
-            target_key = entry.get("matched_name", entry["status"])
+        if not is_live:
+            # 2D Presentation attack / screen spoof detected
+            entry.update(
+                status="spoof",
+                matched_name="SPOOF DETECTED",
+                reason="presentation_attack",
+                distance=None,
+            )
+        else:
+            # Step 2: Vector Search via Database / Qdrant
+            match = engine.identify_face(face_crop, threshold=eff_cosine)
+            if match is None:
+                entry.update(status="unknown", reason="no enrolled persons")
+            else:
+                entry["matched_name"] = match["name"]
+                entry["distance"] = match["distance"]
+                entry["status"] = "authorized" if match["authorized"] else "unauthorized"
+                entry["vector_engine"] = match.get("engine", "sqlite_numpy")
+
+        raw_detections.append(entry)
+
+    # Step 3: Multi-target Temporal Tracking & Spatial Smoothing
+    tracked_results = _get_tracker().update(raw_detections, now=now)
+
+    # Step 4: Persistent Audit Logging
+    for entry in tracked_results:
+        status_val = entry.get("status", "unknown")
+        if log_events and status_val in ("authorized", "unauthorized", "spoof"):
+            target_key = f"{entry.get('track_id', 0)}_{entry.get('matched_name', status_val)}"
             last_logged = _last_event_timestamps.get(target_key, 0.0)
-            if now - last_logged > 5.0:
+            if now - last_logged > 4.0:
                 _last_event_timestamps[target_key] = now
                 _events_log.append({"timestamp": now, **entry})
+                engine.db.log_audit_event(
+                    status=status_val,
+                    camera_id="live_cam",
+                    matched_name=entry.get("matched_name"),
+                    confidence=entry.get("confidence", 0.0),
+                    distance=entry.get("distance"),
+                    liveness_score=entry.get("liveness_score", 1.0),
+                    bbox=entry.get("bbox"),
+                )
+
+    # Step 5: Prometheus Performance Metrics
+    duration_sec = time.time() - start_t
+    cam_fps = _get_camera_manager().get_health().fps
+    metrics.record_inference(duration_sec, tracked_results, cam_fps)
 
     return {
-        "num_faces": len(results),
-        "faces": results,
-        "any_unauthorized": any(f["status"] == "unauthorized" for f in results),
+        "num_faces": len(tracked_results),
+        "faces": tracked_results,
+        "any_unauthorized": any(f["status"] == "unauthorized" for f in tracked_results),
+        "any_spoof": any(f["status"] == "spoof" for f in tracked_results),
+        "inference_latency_ms": round(duration_sec * 1000.0, 1),
     }
 
 
 def _async_inference_worker():
-    """Background worker that continuously runs DeepFace on latest camera frame."""
+    """Background worker that continuously runs AI inference on latest camera frame."""
     global _latest_detections
-    cm = _get_camera_manager()
 
     while _inference_running:
         latest = _get_active_buffer().get_latest()
@@ -314,21 +393,96 @@ async def health():
 async def model_info():
     from face_engine import MODEL_NAME
 
+    engine = _get_engine()
     return {
         "library": "deepface",
         "model_name": MODEL_NAME,
         "detector_backend": DETECTOR_BACKEND,
-        "cosine_threshold": COSINE_THRESHOLD,
-        "persons": _get_engine().list_persons(),
+        "cosine_threshold": engine.threshold,
+        "min_face_size": MIN_FACE_SIZE,
+        "detection_confidence": DETECTION_CONFIDENCE,
+        "inference_max_width": INFERENCE_MAX_WIDTH,
+        "persons": engine.list_persons(),
     }
 
 
-# ---------------- Enrollment ----------------
+# ---------------- Sensitivity & Distance Configuration ----------------
 
 
-@app.post("/persons/enroll")
+@app.get("/settings/sensitivity")
+async def get_sensitivity_settings():
+    """Get current face detection sensitivity and distance parameters."""
+    engine = _get_engine()
+    return {
+        "min_face_size": MIN_FACE_SIZE,
+        "detection_confidence": round(DETECTION_CONFIDENCE, 3),
+        "cosine_match_threshold": round(engine.threshold, 3),
+        "inference_max_width": INFERENCE_MAX_WIDTH,
+        "detector_backend": DETECTOR_BACKEND,
+        "model_name": "Facenet",
+    }
+
+
+@app.post("/settings/sensitivity")
+async def update_sensitivity_settings(
+    min_face_size: Optional[int] = Form(None, ge=8, le=120),
+    detection_confidence: Optional[float] = Form(None, ge=0.05, le=0.95),
+    cosine_match_threshold: Optional[float] = Form(None, ge=0.20, le=0.80),
+    inference_max_width: Optional[int] = Form(None, ge=320, le=1920),
+    preset: Optional[str] = Form(None, description="long_distance | balanced | strict"),
+):
+    """Adjust detection sensitivity and distance presets dynamically."""
+    global MIN_FACE_SIZE, DETECTION_CONFIDENCE, COSINE_MATCH_THRESHOLD, INFERENCE_MAX_WIDTH
+
+    if preset:
+        p = preset.lower().strip()
+        if p in ("long_distance", "far", "high_sensitivity"):
+            MIN_FACE_SIZE = 14
+            DETECTION_CONFIDENCE = 0.20
+            COSINE_MATCH_THRESHOLD = 0.50
+            INFERENCE_MAX_WIDTH = 720
+        elif p in ("balanced", "medium", "standard"):
+            MIN_FACE_SIZE = 16
+            DETECTION_CONFIDENCE = 0.25
+            COSINE_MATCH_THRESHOLD = 0.48
+            INFERENCE_MAX_WIDTH = 720
+        elif p in ("strict", "close", "high_security"):
+            MIN_FACE_SIZE = 30
+            DETECTION_CONFIDENCE = 0.45
+            COSINE_MATCH_THRESHOLD = 0.40
+            INFERENCE_MAX_WIDTH = 640
+        else:
+            raise HTTPException(status_code=422, detail=f"Unknown preset '{preset}'. Choose: long_distance | balanced | strict")
+
+    if min_face_size is not None:
+        MIN_FACE_SIZE = int(min_face_size)
+    if detection_confidence is not None:
+        DETECTION_CONFIDENCE = float(detection_confidence)
+    if cosine_match_threshold is not None:
+        COSINE_MATCH_THRESHOLD = float(cosine_match_threshold)
+    if inference_max_width is not None:
+        INFERENCE_MAX_WIDTH = int(inference_max_width)
+
+    _get_engine().threshold = COSINE_MATCH_THRESHOLD
+
+    return {
+        "status": "updated",
+        "settings": {
+            "min_face_size": MIN_FACE_SIZE,
+            "detection_confidence": round(DETECTION_CONFIDENCE, 3),
+            "cosine_match_threshold": round(COSINE_MATCH_THRESHOLD, 3),
+            "inference_max_width": INFERENCE_MAX_WIDTH,
+            "detector_backend": DETECTOR_BACKEND,
+        },
+    }
+
+
+# ---------------- Enrollment & Management (Secured) ----------------
+
+
+@app.post("/persons/enroll", dependencies=[Depends(verify_admin_access)])
 async def enroll(name: str = Form(...), files: List[UploadFile] = File(...)):
-    """Save face embeddings for an authorized person (1+ images)."""
+    """Save face embeddings for an authorized person (1+ images) with vector persistence."""
     if not name.strip():
         raise HTTPException(status_code=422, detail="Name must not be empty")
     images = [_read_image(await f.read()) for f in files]
@@ -346,7 +500,7 @@ async def list_persons():
     return {"persons": _get_engine().list_persons()}
 
 
-@app.delete("/persons/{name}")
+@app.delete("/persons/{name}", dependencies=[Depends(verify_admin_access)])
 async def delete_person(name: str):
     if not _get_engine().remove(name):
         raise HTTPException(status_code=404, detail=f"Person not found: {name}")
@@ -360,6 +514,41 @@ async def get_person_photo(name: str):
     if photo_path is None:
         raise HTTPException(status_code=404, detail=f"No photo found for: {name}")
     return FileResponse(photo_path, media_type="image/jpeg", filename=f"{name}.jpg")
+
+
+# ---------------- Production Audit & Metrics Endpoints ----------------
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Expose real-time Prometheus monitoring metrics for scraping."""
+    enrolled_count = len(_get_engine().list_persons())
+    metrics_text = metrics.generate_prometheus_text(enrolled_persons_count=enrolled_count)
+    return Response(content=metrics_text, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.get("/audit/events")
+async def audit_events(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    status: Optional[str] = Query(default=None, description="authorized | unauthorized | spoof"),
+    name: Optional[str] = Query(default=None, description="Search by person name"),
+):
+    """Query persistent database audit logs."""
+    total, items = _get_engine().db.list_audit_events(limit=limit, offset=offset, status=status, search_name=name)
+    return {
+        "total": total,
+        "count": len(items),
+        "offset": offset,
+        "limit": limit,
+        "events": items,
+    }
+
+
+@app.get("/db/stats")
+async def db_stats():
+    """Get vector database and persistence engine statistics."""
+    return _get_engine().db.get_stats()
 
 
 # ---------------- Camera Source & Ingestion ----------------
@@ -377,7 +566,7 @@ async def get_camera_health():
     return _get_camera_manager().get_health().to_dict()
 
 
-@app.post("/camera/configure")
+@app.post("/camera/configure", dependencies=[Depends(verify_admin_access)])
 async def configure_camera(
     source_type: str = Form(..., description="usb | http_mjpeg | rtsp | mobile | video_file"),
     source_uri: str = Form(..., description="Device index (e.g. 0), /dev/video0, URL, or 'browser'"),
@@ -428,7 +617,7 @@ async def verify(file: UploadFile = File(...)):
 @app.get("/events")
 async def events(limit: int = Query(default=50, ge=1, le=300)):
     items = list(_events_log)[-limit:]
-    unauthorized = sum(1 for e in items if e["status"] == "unauthorized")
+    unauthorized = sum(1 for e in items if e["status"] in ("unauthorized", "spoof"))
     return {"count": len(items), "unauthorized_count": unauthorized, "events": items}
 
 
@@ -446,14 +635,14 @@ async def stream():
 
 @app.get("/stream/detect")
 async def stream_detect():
-    """Live annotated MJPEG: green=AUTHORIZED, red=UNAUTHORIZED, orange=UNKNOWN."""
+    """Live annotated MJPEG: green=AUTHORIZED, red=UNAUTHORIZED, gold=SPOOF, orange=UNKNOWN."""
     from streamer import mjpeg_from_buffer
 
-    # Orientation is already applied at capture time, so no transform needed here.
     colors = {
-        "authorized": (0, 220, 0),
-        "unauthorized": (0, 0, 255),
-        "unknown": (0, 165, 255),
+        "authorized": (0, 220, 0),     # Green
+        "unauthorized": (0, 0, 255),   # Red
+        "spoof": (0, 215, 255),        # Gold / Yellow
+        "unknown": (0, 165, 255),      # Orange
     }
 
     def annotate(frame: np.ndarray):
@@ -470,7 +659,9 @@ async def stream_detect():
             if status == "authorized":
                 label = f"AUTHORIZED: {f.get('matched_name', '')}"
             elif status == "unauthorized":
-                label = "UNAUTHORIZED"
+                label = f"UNAUTHORIZED"
+            elif status == "spoof":
+                label = "⚠️ SPOOF DETECTED"
             else:
                 label = "UNKNOWN"
 
@@ -482,7 +673,7 @@ async def stream_detect():
                 (x1 + 3, max(th + 2, y1 - 4)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
-                (255, 255, 255),
+                (255, 255, 255) if status != "spoof" else (0, 0, 0),
                 2,
             )
         return vis
@@ -910,8 +1101,8 @@ async def mobile_camera_page():
                         stream = await navigator.mediaDevices.getUserMedia({{
                             video: {{
                                 facingMode: {{ exact: facingMode }},
-                                width: {{ ideal: 640 }},
-                                height: {{ ideal: 480 }}
+                                width: {{ ideal: 1280 }},
+                                height: {{ ideal: 720 }}
                             }},
                             audio: false
                         }});
@@ -920,8 +1111,8 @@ async def mobile_camera_page():
                             stream = await navigator.mediaDevices.getUserMedia({{
                                 video: {{
                                     facingMode: {{ ideal: facingMode }},
-                                    width: {{ ideal: 640 }},
-                                    height: {{ ideal: 480 }}
+                                    width: {{ ideal: 1280 }},
+                                    height: {{ ideal: 720 }}
                                 }},
                                 audio: false
                             }});
@@ -970,8 +1161,8 @@ async def mobile_camera_page():
             let isSending = false;
             function sendFrame() {{
                 if (!video.videoWidth || isSending || !stream) return;
-                canvas.width = Math.min(video.videoWidth, 640);
-                canvas.height = Math.min(video.videoHeight, 480);
+                canvas.width = Math.min(video.videoWidth, 1280);
+                canvas.height = Math.min(video.videoHeight, 720);
                 let ctx = canvas.getContext('2d');
 
                 // If user camera, draw mirrored on canvas if needed
@@ -1185,6 +1376,18 @@ async def root():
                 </div>
             </div>
 
+            <div class="connection-bar" style="background:#0f172a; border-color:#334155; flex-wrap:wrap; gap:10px;">
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <span>🎯 <b>Distance Sensitivity:</b></span>
+                    <button class="btn-action" onclick="setSensitivity('long_distance')" style="background:#0284c7; padding:6px 12px; font-size:0.85rem;">🔭 Long-Distance</button>
+                    <button class="btn-action" onclick="setSensitivity('balanced')" style="background:#334155; padding:6px 12px; font-size:0.85rem;">⚖️ Balanced</button>
+                    <button class="btn-action" onclick="setSensitivity('strict')" style="background:#334155; padding:6px 12px; font-size:0.85rem;">🔒 Strict</button>
+                </div>
+                <div id="sensitivityStatus" style="font-size:0.82rem; color:#38bdf8;">
+                    Threshold: 0.48 | MinFace: 14px | Conf: 0.22
+                </div>
+            </div>
+
             <div class="connection-bar">
                 <div>
                     <span>📱 <b>Connect Mobile Camera (HTTPS Secure):</b></span><br>
@@ -1204,6 +1407,23 @@ async def root():
             let waitingOverlay = document.getElementById('waitingOverlay');
             let statusDot = document.getElementById('statusDot');
             let statusText = document.getElementById('statusText');
+
+            async function setSensitivity(preset) {{
+                let fd = new FormData();
+                fd.append('preset', preset);
+                try {{
+                    await fetch('/settings/sensitivity', {{ method: 'POST', body: fd }});
+                    fetchSensitivity();
+                }} catch(e) {{}}
+            }}
+
+            async function fetchSensitivity() {{
+                try {{
+                    let res = await fetch('/settings/sensitivity');
+                    let d = await res.json();
+                    document.getElementById('sensitivityStatus').textContent = 'Match Thresh: ' + d.cosine_match_threshold + ' | MinFace: ' + d.min_face_size + 'px | Conf: ' + d.detection_confidence;
+                }} catch(e) {{}}
+            }}
 
             async function pollStatus() {{
                 try {{
@@ -1226,6 +1446,7 @@ async def root():
                 }} catch(e) {{}}
             }}
 
+            fetchSensitivity();
             setInterval(pollStatus, 500);
             pollStatus();
         </script>
