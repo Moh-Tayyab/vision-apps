@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # Self-Hosted Qdrant Vector Engine
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: face_auth_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+
+  # Face Authorization Microservice (FastAPI + DeepFace)
+  face_authorization:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: face_auth_backend
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+      - "8445:8445"
+    depends_on:
+      - qdrant
+    env_file:
+      - .env
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - DATA_DIR=/app/data
+    volumes:
+      - face_auth_data:/app/data
+      - deepface_weights:/app/.deepface
+      - ./certs:/app/certs
+
+  # Streamlit Admin Dashboard
+  face_auth_admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: face_auth_dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    depends_on:
+      - face_authorization
+    env_file:
+      - .env
+    environment:
+      - FASTAPI_URL=http://face_authorization:8003
+
+volumes:
+  qdrant_storage:
+  face_auth_data:
+  deepface_weights:

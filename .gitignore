@@ -52,5 +52,12 @@ SPEC.md
 # Logs
 *.log
 
+# Databases & runtime data
+*.db
+*.sqlite
+*.sqlite3
+data/
+**/data/
+
 # Docker
 docker-compose.override.yml

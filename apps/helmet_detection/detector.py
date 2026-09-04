@@ -94,20 +94,20 @@ class _BaseDetector:
 
 
 class LocalHelmetDetector(_BaseDetector):
-    """Local YOLO. Works out of the box with COCO (persons only, status=unknown);
-    full helmet/no-helmet when given weights trained on helmet/head classes."""
+    """Local YOLO. Works out of the box with custom best.pt or pretrained models."""
 
-    def __init__(self, model_path: str, conf_threshold: float = 0.5):
+    def __init__(self, model_path: str, conf_threshold: float = 0.38, imgsz: int = 640):
         from ultralytics import YOLO
 
         self.model_path = model_path
         self.conf_threshold = conf_threshold
+        self.imgsz = imgsz
         self.model = YOLO(model_path)
         self._class_names = self.model.names
 
     def detect_boxes(self, image: np.ndarray, confidence: Optional[float] = None) -> List[Box]:
         conf = confidence if confidence is not None else self.conf_threshold
-        results = self.model(image, conf=conf, verbose=False)
+        results = self.model(image, conf=conf, imgsz=self.imgsz, verbose=False)
         boxes: List[Box] = []
         for result in results:
             if result.boxes is None:
@@ -123,6 +123,7 @@ class LocalHelmetDetector(_BaseDetector):
             "backend": "local_yolo",
             "model_path": self.model_path,
             "conf_threshold": self.conf_threshold,
+            "imgsz": self.imgsz,
             "classes": list(self._class_names.values()) if isinstance(self._class_names, dict) else self._class_names,
         }
 
@@ -178,7 +179,9 @@ class HelmetDetector:
 
     def __init__(self):
         backend = os.getenv("MODEL_BACKEND", "local")
-        conf = float(os.getenv("CONF_THRESHOLD", "0.5"))
+        conf = float(os.getenv("CONF_THRESHOLD", "0.38"))
+        imgsz = int(os.getenv("IMGSZ", "640"))
+
         if backend == "roboflow":
             model_url = os.getenv("ROBOFLOW_MODEL_URL", "")
             api_key = os.getenv("ROBOFLOW_API_KEY", "")
@@ -186,12 +189,21 @@ class HelmetDetector:
                 raise ValueError("ROBOFLOW_MODEL_URL and ROBOFLOW_API_KEY required for cloud backend")
             self._detector: _BaseDetector = RoboflowHelmetDetector(model_url, api_key, conf)
         else:
-            model_path = os.getenv("MODEL_PATH", "helmet_yolo.pt")
+            # Check candidate model paths (best.pt preferred)
+            model_path = os.getenv("MODEL_PATH", "best.pt")
             if not os.path.isabs(model_path):
-                candidate = os.path.join(os.path.dirname(__file__), model_path)
-                if os.path.exists(candidate):
-                    model_path = candidate
-            self._detector = LocalHelmetDetector(model_path, conf)
+                base_dir = os.path.dirname(__file__)
+                candidates = [
+                    os.path.join(base_dir, model_path),
+                    os.path.join(base_dir, "best.pt"),
+                    os.path.join(base_dir, "yolov8m-hard-hat-detection.pt"),
+                    os.path.join(base_dir, "helmet_yolo.pt"),
+                ]
+                for cand in candidates:
+                    if os.path.exists(cand):
+                        model_path = cand
+                        break
+            self._detector = LocalHelmetDetector(model_path, conf, imgsz=imgsz)
         self._backend = backend
 
     @property
@@ -207,52 +219,63 @@ class HelmetDetector:
         heads = [b for b in raw if b.class_name in HEAD_CLASSES]
         caps = [b for b in raw if b.class_name in CAP_CLASSES]
 
+        matched_helmets = set()
+        matched_heads = set()
         persons: List[PersonStatus] = []
+
+        # 1. Match against detected person bounding boxes
         for b in raw:
             if b.class_name not in PERSON_CLASSES:
                 continue
-            has_helmet = any(b.contains(h) for h in helmets)
-            has_head = any(b.contains(hd) for hd in heads)
-            has_cap = any(b.contains(c) for c in caps)
+
+            person_helmets = [h for h in helmets if b.contains(h)]
+            person_heads = [hd for hd in heads if b.contains(hd)]
+            person_caps = [c for c in caps if b.contains(c)]
+
+            has_helmet = len(person_helmets) > 0
+            has_head = len(person_heads) > 0
+            has_cap = len(person_caps) > 0
+
+            for h in person_helmets:
+                matched_helmets.add(id(h))
+            for hd in person_heads:
+                matched_heads.add(id(hd))
 
             if has_helmet:
-                # Check if detected "helmet" is actually a cap (size heuristic)
-                helmet_box = next(h for h in helmets if b.contains(h))
-                person_area = (b.x2 - b.x1) * (b.y2 - b.y1)
-                helmet_area = (helmet_box.x2 - helmet_box.x1) * (helmet_box.y2 - helmet_box.y1)
-                helmet_ratio = helmet_area / person_area if person_area > 0 else 0
-
-                # If helmet box is very small relative to person (< 3%), likely a cap not a helmet
-                if helmet_ratio < 0.03:
-                    status = "no_helmet"
-                else:
-                    status = "helmet"
+                status = "helmet"
             elif has_head or has_cap:
                 status = "no_helmet"
             else:
+                # If neither head nor helmet detected in box, but other heads/helmets exist in scene
                 status = "no_helmet" if (helmets or heads) else "unknown"
+
             persons.append(PersonStatus([b.x1, b.y1, b.x2, b.y2], b.confidence, status))
 
-        # Datasets that label heads/helmets without person boxes still yield results.
-        if not persons:
-            for hd in heads:
-                covered = any(h.x1 <= hd.cx <= h.x2 and h.y1 <= hd.cy <= h.y2 for h in helmets)
+        # 2. Add standalone / distant heads or helmets that were not bounded by a person box
+        unmatched_heads = [hd for hd in heads if id(hd) not in matched_heads]
+        unmatched_helmets = [h for h in helmets if id(h) not in matched_helmets]
+
+        for hd in unmatched_heads:
+            # Check if covered by an unmatched helmet
+            covered = any(h.x1 <= hd.cx <= h.x2 and h.y1 <= hd.cy <= h.y2 for h in unmatched_helmets)
+            persons.append(
+                PersonStatus(
+                    [hd.x1, hd.y1, hd.x2, hd.y2],
+                    hd.confidence,
+                    "helmet" if covered else "no_helmet",
+                )
+            )
+
+        for h in unmatched_helmets:
+            # If not already matched to an unmatched head
+            if not any(h.x1 <= hd.cx <= h.x2 and h.y1 <= hd.cy <= h.y2 for hd in unmatched_heads):
                 persons.append(
                     PersonStatus(
-                        [hd.x1, hd.y1, hd.x2, hd.y2],
-                        hd.confidence,
-                        "helmet" if covered else "no_helmet",
+                        [h.x1, h.y1, h.x2, h.y2],
+                        h.confidence,
+                        "helmet",
                     )
                 )
-            for h in helmets:
-                if not any(hd.x1 <= h.cx <= hd.x2 and hd.y1 <= h.cy <= hd.y2 for hd in heads):
-                    persons.append(
-                        PersonStatus(
-                            [h.x1, h.y1, h.x2, h.y2],
-                            h.confidence,
-                            "helmet",
-                        )
-                    )
 
         return FrameResult(persons=persons, raw_boxes=raw, inference_time_ms=elapsed_ms)
 

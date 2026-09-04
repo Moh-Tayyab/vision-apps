@@ -7,3 +7,4 @@ opencv-python-headless>=4.10.0.84
 numpy>=1.26.0,<3
 requests>=2.31.0
 gunicorn>=22.0.0
+qdrant-client>=1.12.0

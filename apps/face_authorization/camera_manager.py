@@ -300,8 +300,8 @@ class CameraSource:
                         cap = cv2.VideoCapture(str(idx))
 
                 if cap.isOpened():
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     cap.set(cv2.CAP_PROP_FPS, self.target_fps)
                     return cap
@@ -372,11 +372,11 @@ class CameraSource:
                             self._last_error = "Frame read returned empty"
                         break
 
-                # Downscale large frames to max 640p for fast real-time inference & fluid streaming
+                # Downscale excessively large frames (e.g. 4K) to 1280p for HD clarity on distant faces
                 h, w = frame.shape[:2]
-                if w > 640:
-                    scale = 640 / w
-                    frame = cv2.resize(frame, (640, int(h * scale)), interpolation=cv2.INTER_AREA)
+                if w > 1280:
+                    scale = 1280 / w
+                    frame = cv2.resize(frame, (1280, int(h * scale)), interpolation=cv2.INTER_AREA)
 
                 # Apply orientation correction so display + inference agree.
                 frame = _apply_orientation(frame)
