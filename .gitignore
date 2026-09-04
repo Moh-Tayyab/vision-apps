@@ -10,10 +10,10 @@ eggs/
 *.egg
 
 # Virtual Environment
+.venv/
 venv/
 env/
 ENV/
-.venv/
 
 # IDE
 .vscode/
@@ -29,32 +29,35 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Models (large files)
+# Models & Binaries (large files)
 *.pt
 *.onnx
 *.engine
-
-# App runtime data
-data/
-.deepface/
-
-# Logs
-*.log
-
-# Docker
-docker-compose.override.yml
-
-# Large binary files
-cloudflared
-mobileclip2_b.ts
-mobileclip_blt.ts
+*.ts
 *.part
+cloudflared
 
 # Tests outputs & cache
 tests/inference_cache.json
 tests/vis_outputs/
 .slc/
+.deepface/
 
-# Config (local only)
-opencode.jsonc
-AGENTS.md
+# Specs (local only)
+spec/
+SPEC.md
+**/spec/
+**/SPEC.md
+
+# Logs
+*.log
+
+# Databases & runtime data
+*.db
+*.sqlite
+*.sqlite3
+data/
+**/data/
+
+# Docker
+docker-compose.override.yml
