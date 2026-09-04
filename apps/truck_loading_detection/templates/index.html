@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Truck Loading Directional Tripwire Counter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0b0f19;
+            --bg-surface: #131b2e;
+            --bg-card: rgba(22, 32, 54, 0.75);
+            --bg-card-hover: rgba(30, 42, 70, 0.85);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --border-glow: rgba(56, 189, 248, 0.25);
+            
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            
+            --accent-in: #10b981;
+            --accent-in-glow: rgba(16, 185, 129, 0.2);
+            --accent-out: #f43f5e;
+            --accent-out-glow: rgba(244, 63, 94, 0.2);
+            --accent-net: #06b6d4;
+            --accent-net-glow: rgba(6, 182, 212, 0.2);
+            --accent-primary: #3b82f6;
+            --accent-tripwire: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            background-image: 
+                radial-gradient(circle at 15% 15%, rgba(6, 182, 212, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 85% 85%, rgba(16, 185, 129, 0.05) 0%, transparent 40%);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            background: var(--bg-card);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+        }
+
+        .brand-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #06b6d4, #3b82f6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            box-shadow: 0 4px 15px rgba(6, 182, 212, 0.35);
+        }
+
+        .brand-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.35rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(to right, #ffffff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-subtitle {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .header-badges {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.85rem;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            border: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .badge-live {
+            background: rgba(16, 185, 129, 0.12);
+            border-color: rgba(16, 185, 129, 0.3);
+            color: var(--accent-in);
+        }
+
+        .badge-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+            animation: pulse 1.8s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.85); }
+        }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 1.5rem;
+            flex: 1;
+        }
+
+        @media (max-width: 1100px) {
+            .main-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Left Side: Video Player & Metrics */
+        .left-col {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .metrics-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 1.1rem;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .metric-card.card-in { border-top: 3px solid var(--accent-in); }
+        .metric-card.card-out { border-top: 3px solid var(--accent-out); }
+        .metric-card.card-net { border-top: 3px solid var(--accent-net); }
+        .metric-card.card-fps { border-top: 3px solid #eab308; }
+
+        .metric-label {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .metric-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-top: 0.35rem;
+            display: flex;
+            align-items: baseline;
+            gap: 0.25rem;
+        }
+
+        .val-in { color: var(--accent-in); text-shadow: 0 0 15px var(--accent-in-glow); }
+        .val-out { color: var(--accent-out); text-shadow: 0 0 15px var(--accent-out-glow); }
+        .val-net { color: var(--accent-net); text-shadow: 0 0 15px var(--accent-net-glow); }
+        .val-fps { color: #facc15; }
+
+        .metric-sub {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        /* Video Container */
+        .video-panel {
+            background: var(--bg-card);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .video-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.35rem 0.5rem;
+        }
+
+        .video-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            cursor: crosshair;
+        }
+
+        .video-stream {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .tripwire-hint {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--border-color);
+            padding: 0.35rem 0.85rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        /* Video Controls Bar */
+        .controls-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0.25rem;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 0.55rem 1rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-1px);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #06b6d4, #2563eb);
+            border: none;
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(6, 182, 212, 0.25);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #0891b2, #1d4ed8);
+            box-shadow: 0 6px 16px rgba(6, 182, 212, 0.4);
+        }
+
+        .btn-danger {
+            background: rgba(244, 63, 94, 0.15);
+            border-color: rgba(244, 63, 94, 0.3);
+            color: #fb7185;
+        }
+
+        .btn-danger:hover {
+            background: rgba(244, 63, 94, 0.25);
+        }
+
+        /* Right Side: Sidebar Panels */
+        .right-col {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        .panel-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .panel-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.05rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* Tripwire Adjustment Slider */
+        .slider-box {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            background: rgba(0, 0, 0, 0.25);
+            padding: 0.85rem;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+        }
+
+        .slider-val {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            color: var(--accent-tripwire);
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            outline: none;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--accent-tripwire);
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+            transition: transform 0.15s ease;
+        }
+
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        /* Event History Table */
+        .events-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-height: 250px;
+            overflow-y: auto;
+            padding-right: 0.25rem;
+        }
+
+        .events-list::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .events-list::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+        }
+
+        .event-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 0.55rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .event-dir-in {
+            color: var(--accent-in);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        .event-dir-out {
+            color: var(--accent-out);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        .event-obj {
+            color: var(--text-secondary);
+        }
+
+        .event-time {
+            color: var(--text-muted);
+            font-size: 0.72rem;
+        }
+
+        /* Source & Upload */
+        .source-select {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.6rem 0.85rem;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .file-upload-drop {
+            border: 2px dashed rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            padding: 1.25rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .file-upload-drop:hover {
+            border-color: var(--accent-net);
+            background: rgba(6, 182, 212, 0.05);
+        }
+
+        .file-upload-drop p {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 0.35rem;
+        }
+
+        #fileInput {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="brand">
+            <div class="brand-icon">📦</div>
+            <div>
+                <h1 class="brand-title">Truck Loading Counter</h1>
+                <p class="brand-subtitle">AI Real-Time Directional Tripwire System (YOLO + ByteTrack)</p>
+            </div>
+        </div>
+        <div class="header-badges">
+            <div class="badge badge-live">
+                <span class="badge-dot"></span>
+                <span>STREAM ACTIVE</span>
+            </div>
+            <div class="badge" id="sourceBadge">
+                <span>Source: Sample Video</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="main-layout">
+        
+        <!-- Left Column: Video & Metrics -->
+        <div class="left-col">
+            
+            <!-- Metric Cards -->
+            <div class="metrics-grid">
+                <div class="metric-card card-in">
+                    <div class="metric-label">
+                        <span>Loaded (+1)</span>
+                        <span>🚚</span>
+                    </div>
+                    <div class="metric-value val-in" id="valLoaded">+0</div>
+                    <div class="metric-sub">Left &rarr; Right (Towards Truck)</div>
+                </div>
+
+                <div class="metric-card card-out">
+                    <div class="metric-label">
+                        <span>Returned (-1)</span>
+                        <span>🔄</span>
+                    </div>
+                    <div class="metric-value val-out" id="valReturned">-0</div>
+                    <div class="metric-sub">Right &rarr; Left (Away from Truck)</div>
+                </div>
+
+                <div class="metric-card card-net">
+                    <div class="metric-label">
+                        <span>Net Loaded Total</span>
+                        <span>📊</span>
+                    </div>
+                    <div class="metric-value val-net" id="valNet">0</div>
+                    <div class="metric-sub">Current Cargo Balance</div>
+                </div>
+
+                <div class="metric-card card-fps">
+                    <div class="metric-label">
+                        <span>Inference FPS</span>
+                        <span>⚡</span>
+                    </div>
+                    <div class="metric-value val-fps" id="valFps">25.0</div>
+                    <div class="metric-sub" id="valActiveTracks">Tracking: 0 objs</div>
+                </div>
+            </div>
+
+            <!-- Video Player Panel -->
+            <div class="video-panel">
+                <div class="video-header">
+                    <div class="video-title">
+                        <span>Live Tripwire Monitor Feed</span>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn btn-primary" id="btnPause" onclick="togglePause()">⏸️ Pause</button>
+                        <button class="btn" id="btnLoop" onclick="toggleLoop()">🔁 Loop: ON</button>
+                        <button class="btn btn-danger" onclick="resetCounts()">🔄 Reset Counts</button>
+                    </div>
+                </div>
+
+                <!-- Video Viewport with Click-to-Move Tripwire -->
+                <div class="video-wrapper" id="videoWrapper" onclick="handleVideoClick(event)">
+                    <img src="/video_feed" class="video-stream" id="videoStream" alt="Live Stream">
+                    <div class="tripwire-hint">💡 Click anywhere on the video to reposition the vertical tripwire line</div>
+                </div>
+
+                <!-- Footer Tripwire Slider -->
+                <div class="controls-bar">
+                    <div style="flex: 1; max-width: 450px;">
+                        <div class="slider-box">
+                            <div class="slider-header">
+                                <span>Adjust Tripwire Position (X Coordinate)</span>
+                                <span class="slider-val" id="sliderVal">X = 515 px</span>
+                            </div>
+                            <input type="range" id="lineSlider" min="20" max="1004" value="515" oninput="updateSliderLine(this.value)">
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn" onclick="nudgeLine(-15)">⬅️ Shift Left</button>
+                        <button class="btn" onclick="nudgeLine(15)">Shift Right ➡️</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right Column: Sidebar Panels -->
+        <div class="right-col">
+            
+            <!-- Video Source Selection -->
+            <div class="panel-card">
+                <div class="panel-title">
+                    <span>📹 Video Source</span>
+                </div>
+                <select class="source-select" id="sourceSelect" onchange="changeSource(this.value)">
+                    <option value="sample_truck_loading.mp4">Sample Warehouse Video (Vecteezy)</option>
+                    <option value="0">USB Webcam / Live Camera (Device 0)</option>
+                </select>
+
+                <div class="file-upload-drop" onclick="document.getElementById('fileInput').click()">
+                    <input type="file" id="fileInput" accept="video/mp4,video/avi,video/mov" onchange="uploadVideo(this)">
+                    <div>📁 Upload Custom Video</div>
+                    <p>Click to select an MP4 / AVI file from your computer</p>
+                </div>
+            </div>
+
+            <!-- Crossing Events Log -->
+            <div class="panel-card" style="flex: 1;">
+                <div class="panel-title">
+                    <span>📜 Live Crossing Events</span>
+                    <span style="font-size: 0.75rem; color: var(--text-muted);" id="eventCountBadge">0 events</span>
+                </div>
+                <div class="events-list" id="eventsList">
+                    <div style="color: var(--text-muted); font-size: 0.8rem; text-align: center; padding: 2rem 0;">
+                        No crossing events recorded yet. Objects crossing the tripwire will appear here in real-time.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Parameters Config -->
+            <div class="panel-card">
+                <div class="panel-title">
+                    <span>⚙️ Detection Parameters</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.75rem; font-size: 0.85rem;">
+                    <div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
+                            <span style="color: var(--text-secondary);">Confidence Threshold</span>
+                            <span id="valConf">0.30</span>
+                        </div>
+                        <input type="range" min="0.10" max="0.90" step="0.05" value="0.30" onchange="updateParams('conf', this.value)">
+                    </div>
+
+                    <div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
+                            <span style="color: var(--text-secondary);">Hysteresis Margin (px)</span>
+                            <span id="valHysteresis">15 px</span>
+                        </div>
+                        <input type="range" min="5" max="50" step="5" value="15" onchange="updateParams('hysteresis', this.value)">
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        let currentLineX = 515;
+        let videoWidth = 1024;
+        let isPaused = false;
+        let loopVideo = true;
+
+        // Poll stats periodically (every 350ms)
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+
+                document.getElementById('valLoaded').innerText = `+${data.total_in}`;
+                document.getElementById('valReturned').innerText = `-${data.total_out}`;
+                document.getElementById('valNet').innerText = `${data.net_count}`;
+                document.getElementById('valFps').innerText = `${data.fps}`;
+                document.getElementById('valActiveTracks').innerText = `Tracking: ${data.active_count} objs (Frame ${data.frame_idx})`;
+
+                videoWidth = data.video_width || 1024;
+                currentLineX = data.line_x;
+                document.getElementById('lineSlider').max = videoWidth - 10;
+                document.getElementById('lineSlider').value = currentLineX;
+                document.getElementById('sliderVal').innerText = `X = ${currentLineX} px`;
+
+                // Update pause button label
+                isPaused = data.is_paused;
+                document.getElementById('btnPause').innerHTML = isPaused ? '▶️ Resume' : '⏸️ Pause';
+
+                // Update loop button label
+                loopVideo = data.loop_video;
+                document.getElementById('btnLoop').innerHTML = loopVideo ? '🔁 Loop: ON' : '🔁 Loop: OFF';
+
+                // Update events table
+                renderEvents(data.events || []);
+
+            } catch (err) {
+                console.error('Error fetching stats:', err);
+            }
+        }
+
+        function renderEvents(events) {
+            const list = document.getElementById('eventsList');
+            document.getElementById('eventCountBadge').innerText = `${events.length} recent`;
+
+            if (events.length === 0) {
+                list.innerHTML = `
+                    <div style="color: var(--text-muted); font-size: 0.8rem; text-align: center; padding: 2rem 0;">
+                        No crossing events recorded yet.
+                    </div>`;
+                return;
+            }
+
+            let html = '';
+            for (const ev of events) {
+                const isIn = ev.direction === 'IN';
+                const dirClass = isIn ? 'event-dir-in' : 'event-dir-out';
+                const dirText = isIn ? '>> LOADED (+1)' : '<< RETURNED (-1)';
+                
+                const date = new Date(ev.timestamp * 1000);
+                const timeStr = date.toTimeString().split(' ')[0];
+
+                html += `
+                    <div class="event-item">
+                        <div>
+                            <span class="${dirClass}">${dirText}</span>
+                            <span class="event-obj">#${ev.track_id} ${ev.class_name.toUpperCase()}</span>
+                        </div>
+                        <span class="event-time">${timeStr} (Net: ${ev.net_count})</span>
+                    </div>`;
+            }
+            list.innerHTML = html;
+        }
+
+        async function setLineX(newX) {
+            currentLineX = Math.round(newX);
+            document.getElementById('lineSlider').value = currentLineX;
+            document.getElementById('sliderVal').innerText = `X = ${currentLineX} px`;
+            await fetch('/api/set_line_x', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ line_x: currentLineX })
+            });
+        }
+
+        function updateSliderLine(val) {
+            setLineX(parseInt(val));
+        }
+
+        function nudgeLine(delta) {
+            setLineX(currentLineX + delta);
+        }
+
+        function handleVideoClick(e) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickRatioX = (e.clientX - rect.left) / rect.width;
+            const computedX = clickRatioX * videoWidth;
+            setLineX(computedX);
+        }
+
+        async function togglePause() {
+            const res = await fetch('/api/toggle_pause', { method: 'POST' });
+            const data = await res.json();
+            isPaused = data.is_paused;
+            document.getElementById('btnPause').innerHTML = isPaused ? '▶️ Resume' : '⏸️ Pause';
+        }
+
+        async function toggleLoop() {
+            const res = await fetch('/api/toggle_loop', { method: 'POST' });
+            const data = await res.json();
+            loopVideo = data.loop_video;
+            document.getElementById('btnLoop').innerHTML = loopVideo ? '🔁 Loop: ON' : '🔁 Loop: OFF';
+        }
+
+        async function resetCounts() {
+            await fetch('/api/reset', { method: 'POST' });
+            fetchStats();
+        }
+
+        async function changeSource(src) {
+            await fetch('/api/set_source', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: src })
+            });
+            document.getElementById('sourceBadge').innerText = `Source: ${src === '0' ? 'Webcam 0' : src}`;
+            fetchStats();
+        }
+
+        async function uploadVideo(input) {
+            if (!input.files || input.files.length === 0) return;
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('video', file);
+
+            document.getElementById('sourceBadge').innerText = `Uploading: ${file.name}...`;
+
+            try {
+                const res = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('sourceBadge').innerText = `Source: ${data.filename}`;
+                    
+                    // Add option to select dropdown
+                    const sel = document.getElementById('sourceSelect');
+                    const opt = document.createElement('option');
+                    opt.value = data.source;
+                    opt.innerText = `Uploaded: ${data.filename}`;
+                    opt.selected = true;
+                    sel.appendChild(opt);
+                }
+            } catch (err) {
+                alert('Upload failed: ' + err.message);
+            }
+        }
+
+        async function updateParams(key, val) {
+            if (key === 'conf') {
+                document.getElementById('valConf').innerText = parseFloat(val).toFixed(2);
+            } else if (key === 'hysteresis') {
+                document.getElementById('valHysteresis').innerText = `${val} px`;
+            }
+            await fetch('/api/update_params', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [key]: val })
+            });
+        }
+
+        // Start polling
+        setInterval(fetchStats, 350);
+        fetchStats();
+    </script>
+</body>
+</html>

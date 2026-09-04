@@ -1,0 +1,12 @@
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.env
+.env.local
+*.pt
+**/*.pt
+*.onnx
+*.engine
+*.md
