@@ -41,6 +41,12 @@ cloudflared
 tests/inference_cache.json
 tests/vis_outputs/
 
+# Specs (local only)
+spec/
+SPEC.md
+**/spec/
+**/SPEC.md
+
 # Logs
 *.log
 
