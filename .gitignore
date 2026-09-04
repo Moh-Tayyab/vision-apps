@@ -10,6 +10,7 @@ eggs/
 *.egg
 
 # Virtual Environment
+.venv/
 venv/
 env/
 ENV/
@@ -32,6 +33,15 @@ Thumbs.db
 *.pt
 *.onnx
 *.engine
+
+# Tests outputs & cache
+tests/inference_cache.json
+tests/vis_outputs/
+cloudflared
+*.ts
+*.part
+.slc/
+.deepface/
 
 # Logs
 *.log
