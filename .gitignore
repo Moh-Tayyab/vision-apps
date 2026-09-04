@@ -11,6 +11,7 @@ eggs/
 
 # Virtual Environment
 venv/
+.venv/
 env/
 ENV/
 
@@ -38,3 +39,12 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Temporary test artifacts and binaries
+tests/vis_outputs/
+tests/inference_cache.json
+cloudflared
+*.part
+*.ts
+.deepface/
+.slc/
