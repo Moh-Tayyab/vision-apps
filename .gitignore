@@ -43,6 +43,12 @@ tests/vis_outputs/
 .slc/
 .deepface/
 
+# Specs (local only)
+spec/
+SPEC.md
+**/spec/
+**/SPEC.md
+
 # Logs
 *.log
 
