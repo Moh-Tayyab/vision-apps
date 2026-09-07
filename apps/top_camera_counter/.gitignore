@@ -12,6 +12,7 @@ env/
 
 # YOLO Model (large file)
 *.pt
+!best.pt
 *.onnx
 *.engine
 

@@ -128,10 +128,14 @@ class CartonDetector:
 
         model_file = Path(self.model_path)
         if not model_file.exists():
-            raise DetectorError(
-                f"YOLO model not found: {self.model_path}. "
-                "Train your model and place the .pt file in the project root."
-            )
+            cand = Path(__file__).parent / self.model_path
+            if cand.exists():
+                model_file = cand
+            else:
+                raise DetectorError(
+                    f"YOLO model not found: {self.model_path}. "
+                    "Train your model and place the .pt file in the app directory."
+                )
 
         self.model = YOLO(str(model_file))
         if self.device:

@@ -31,6 +31,10 @@ Thumbs.db
 
 # Models & Binaries (large files)
 *.pt
+!apps/top_camera_counter/best.pt
+!apps/helmet_detection/best.pt
+!apps/helmet_detection/helmet_yolo.pt
+!apps/truck_loading_detection/yolov8n.pt
 *.onnx
 *.engine
 *.ts
