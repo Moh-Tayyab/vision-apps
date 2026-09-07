@@ -31,6 +31,10 @@ Thumbs.db
 
 # Models & Binaries (large files)
 *.pt
+!apps/top_camera_counter/best.pt
+!apps/helmet_detection/best.pt
+!apps/helmet_detection/helmet_yolo.pt
+!apps/truck_loading_detection/yolov8n.pt
 *.onnx
 *.engine
 *.ts
@@ -40,8 +44,6 @@ cloudflared
 # Tests outputs & cache
 tests/inference_cache.json
 tests/vis_outputs/
-.slc/
-.deepface/
 
 # Specs (local only)
 spec/
@@ -52,12 +54,6 @@ SPEC.md
 # Logs
 *.log
 
-# Databases & runtime data
-*.db
-*.sqlite
-*.sqlite3
-data/
-**/data/
-
 # Docker
 docker-compose.override.yml
+

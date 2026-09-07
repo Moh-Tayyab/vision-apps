@@ -56,9 +56,14 @@ def get_yolo_model() -> YOLO:
     """Lazy load YOLO model singleton."""
     global _model
     if _model is None:
-        if not Path(DEFAULT_MODEL_PATH).exists():
-            raise HTTPException(503, f"YOLO model file not found: {DEFAULT_MODEL_PATH}")
-        _model = YOLO(DEFAULT_MODEL_PATH)
+        target_path = Path(DEFAULT_MODEL_PATH)
+        if not target_path.exists():
+            cand = Path(__file__).parent / DEFAULT_MODEL_PATH
+            if cand.exists():
+                target_path = cand
+            else:
+                raise HTTPException(503, f"YOLO model file not found: {DEFAULT_MODEL_PATH}")
+        _model = YOLO(str(target_path))
     return _model
 
 

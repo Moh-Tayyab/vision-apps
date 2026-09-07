@@ -128,86 +128,41 @@ class LocalHelmetDetector(_BaseDetector):
         }
 
 
-class RoboflowHelmetDetector(_BaseDetector):
-    """Roboflow-hosted helmet model via REST."""
-
-    def __init__(self, model_url: str, api_key: str, confidence: float = 0.5):
-        self.model_url = model_url.rstrip("/")
-        self.api_key = api_key
-        self.confidence = confidence
-
-    def detect_boxes(self, image: np.ndarray, confidence: Optional[float] = None) -> List[Box]:
-        start = time.perf_counter()
-        _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        img_b64 = base64.b64encode(buffer.tobytes()).decode("ascii")
-        conf = confidence if confidence is not None else self.confidence
-        url = f"{self.model_url}?api_key={self.api_key}&confidence={conf}"
-        response = requests.post(
-            url,
-            data=img_b64,
-            headers={"Content-Type": "text/plain"},
-            timeout=30,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        boxes: List[Box] = []
-        for pred in data.get("predictions", []):
-            w, h = pred["width"], pred["height"]
-            boxes.append(
-                Box(
-                    pred["x"] - w / 2,
-                    pred["y"] - h / 2,
-                    pred["x"] + w / 2,
-                    pred["y"] + h / 2,
-                    pred["confidence"],
-                    pred.get("class", "unknown").lower(),
-                )
-            )
-        return boxes
-
-    def get_model_info(self) -> dict:
-        return {
-            "backend": "roboflow_cloud",
-            "model_url": self.model_url,
-            "confidence": self.confidence,
-        }
-
-
 class HelmetDetector:
-    """Facade: picks backend from env and derives per-person helmet status."""
+    """Performs helmet and safety compliance detection using local trained YOLO model."""
 
-    def __init__(self):
-        backend = os.getenv("MODEL_BACKEND", "local")
-        conf = float(os.getenv("CONF_THRESHOLD", "0.38"))
-        imgsz = int(os.getenv("IMGSZ", "640"))
+    def __init__(self, model_path: Optional[str] = None, conf_threshold: Optional[float] = None, imgsz: Optional[int] = None):
+        conf = conf_threshold if conf_threshold is not None else float(os.getenv("CONF_THRESHOLD", "0.38"))
+        imgsz_val = imgsz if imgsz is not None else int(os.getenv("IMGSZ", "640"))
 
-        if backend == "roboflow":
-            model_url = os.getenv("ROBOFLOW_MODEL_URL", "")
-            api_key = os.getenv("ROBOFLOW_API_KEY", "")
-            if not model_url or not api_key:
-                raise ValueError("ROBOFLOW_MODEL_URL and ROBOFLOW_API_KEY required for cloud backend")
-            self._detector: _BaseDetector = RoboflowHelmetDetector(model_url, api_key, conf)
-        else:
-            # Check candidate model paths (best.pt preferred)
-            model_path = os.getenv("MODEL_PATH", "best.pt")
-            if not os.path.isabs(model_path):
-                base_dir = os.path.dirname(__file__)
-                candidates = [
-                    os.path.join(base_dir, model_path),
-                    os.path.join(base_dir, "best.pt"),
-                    os.path.join(base_dir, "yolov8m-hard-hat-detection.pt"),
-                    os.path.join(base_dir, "helmet_yolo.pt"),
-                ]
-                for cand in candidates:
-                    if os.path.exists(cand):
-                        model_path = cand
-                        break
-            self._detector = LocalHelmetDetector(model_path, conf, imgsz=imgsz)
-        self._backend = backend
+        chosen_path = model_path or os.getenv("MODEL_PATH", "best.pt")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Check candidate model paths
+        candidates = [
+            chosen_path if os.path.isabs(chosen_path) else os.path.join(base_dir, chosen_path),
+            os.path.join(base_dir, "best.pt"),
+            os.path.join(base_dir, "helmet_yolo.pt"),
+            os.path.join(base_dir, "yolov8m-hard-hat-detection.pt"),
+        ]
+        
+        final_model_path = None
+        for cand in candidates:
+            if os.path.exists(cand):
+                final_model_path = cand
+                break
+
+        if not final_model_path:
+            raise FileNotFoundError(
+                f"Helmet detection model weights not found. Looked in: {candidates}"
+            )
+
+        self._detector = LocalHelmetDetector(final_model_path, conf, imgsz=imgsz_val)
+        self._backend = "local_yolo"
 
     @property
     def backend(self) -> str:
+        return self._backend
         return self._backend
 
     def detect(self, image: np.ndarray, confidence: Optional[float] = None) -> FrameResult:
