@@ -56,8 +56,8 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=str,
-        default="yolov8n.pt",
-        help="YOLO model path or model name (e.g. yolov8n.pt, yolov8s.pt, custom_carton.pt).",
+        default=None,
+        help="YOLO model path or model name (e.g. yolov8s-worldv2.pt, yolov8n.pt).",
     )
     parser.add_argument(
         "--line-x",
@@ -114,6 +114,13 @@ def parse_args():
         help="Minimum frame cooldown before a single track ID can trigger another crossing (default: 15).",
     )
     parser.add_argument(
+        "--count-mode",
+        type=str,
+        default="cartons_only",
+        choices=["cartons_only", "people_only", "all"],
+        help="Selective counting mode (cartons_only: prevents worker double counting, people_only: counts workers, all: counts everything).",
+    )
+    parser.add_argument(
         "--save",
         action="store_true",
         help="Save the annotated output video.",
@@ -135,10 +142,16 @@ def parse_args():
 def main():
     args = parse_args()
 
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
     # Determine video source
     source = args.source
     if source.isdigit():
         source = int(source)
+    elif not os.path.exists(str(source)) and not str(source).startswith(("http://", "https://", "rtsp://")):
+        candidate = os.path.join(script_dir, str(source))
+        if os.path.exists(candidate):
+            source = candidate
 
     if not os.path.exists(str(source)) and not isinstance(source, int) and not str(source).startswith("rtsp"):
         print(f"[ERROR] Source video '{source}' not found.")
@@ -162,8 +175,25 @@ def main():
     print(f"[INFO] Virtual Tripwire initialized at X = {line_x}")
 
     # Load YOLO Model
-    print(f"[INFO] Loading YOLO model: {args.model}")
-    model = YOLO(args.model)
+    model_path = args.model
+    if model_path is None:
+        cand_world = os.path.abspath(os.path.join(script_dir, "..", "..", "yolov8s-worldv2.pt"))
+        if os.path.exists(cand_world):
+            model_path = cand_world
+        else:
+            model_path = "yolov8n.pt"
+    if not os.path.exists(model_path):
+        candidate_model = os.path.join(script_dir, model_path)
+        if os.path.exists(candidate_model):
+            model_path = candidate_model
+    print(f"[INFO] Loading YOLO model: {model_path}")
+    model = YOLO(model_path)
+    if hasattr(model, "set_classes"):
+        try:
+            model.set_classes(["person", "cardboard box", "carton"])
+            print("[INFO] Set model classes: person, cardboard box, carton")
+        except Exception:
+            pass
     model_names = model.names
 
     # Determine target classes to track
@@ -178,8 +208,8 @@ def main():
                     if c.lower() in cname.lower():
                         target_class_ids.append(cid)
     else:
-        # Default smart filter: person, carton, box, suitcase, backpack
-        desired_names = {"person", "carton", "box", "package", "suitcase", "backpack"}
+        # Default smart filter: person, carton, cardboard box, suitcase, backpack
+        desired_names = {"person", "carton", "cardboard box", "box", "package", "suitcase", "backpack"}
         matched = [cid for cid, name in model_names.items() if name.lower() in desired_names]
         if matched:
             target_class_ids = matched
@@ -187,11 +217,23 @@ def main():
         else:
             print(f"[INFO] Tracking all detected classes from model: {list(model_names.values())}")
 
+    # Determine countable classes
+    count_modes = {
+        "cartons_only": {"carton", "box", "package", "suitcase", "backpack"},
+        "people_only": {"person"},
+        "all": None,
+    }
+    countable_classes = count_modes.get(args.count_mode, None)
+
     # Initialize Counter Engine and Visualizer
     counter = TripwireCounter(
         line_x=line_x,
         hysteresis=args.hysteresis,
         cooldown_frames=args.cooldown,
+        max_inactive_frames=90,
+        max_events=500,
+        countable_classes=countable_classes,
+        min_displacement_px=15,
     )
     visualizer = LoadingVisualizer()
 
@@ -275,7 +317,8 @@ def main():
                     new_events = counter.update(tracked_objects, frame_idx)
                     for ev in new_events:
                         direction_str = "+1 LOADED (Left->Right)" if ev["direction"] == "IN" else "-1 RETURNED (Right->Left)"
-                        print(f"Frame {frame_idx:04d} | Object #{ev['track_id']} ({ev['class_name']}) crossed line: {direction_str} | Net: {ev['net_count']}")
+                        carried_info = f" (Carried by Worker #{ev['carried_by']})" if ev.get("carried_by") else ""
+                        print(f"Frame {frame_idx:04d} | Object #{ev['track_id']} ({ev['class_name']}){carried_info} crossed line: {direction_str} | Net Cargo: {ev['net_count']}")
 
                 # Draw Visuals on Frame
                 # 1. Motion Trajectory Trails
@@ -284,8 +327,14 @@ def main():
                 # 2. Virtual Tripwire Line
                 visualizer.draw_tripwire(frame, line_state["line_x"], is_dragging=is_mouse_dragging)
 
-                # 3. Object Bounding Boxes & Tags
-                visualizer.draw_detections(frame, tracked_objects, counter.track_side, line_state["line_x"])
+                # 3. Object Bounding Boxes, Tags & Worker-Carton Association Tethers
+                visualizer.draw_detections(
+                    frame=frame,
+                    tracked_objects=tracked_objects,
+                    track_side=counter.track_side,
+                    line_x=line_state["line_x"],
+                    associations=counter.current_associations,
+                )
 
                 # 4. Dashboard HUD Overlay & Toast Alert
                 visualizer.draw_hud(
@@ -297,6 +346,7 @@ def main():
                     active_count=len(tracked_objects),
                     recent_event=counter.recent_event,
                     recent_event_expiry=counter.recent_event_expiry,
+                    worker_trips=counter.worker_trips_in,
                 )
 
                 # 5. Instructions footer
@@ -349,9 +399,11 @@ def main():
         print("=" * 60)
         print(f"Total Frames Processed : {frame_idx}")
         print(f"Total Time Taken       : {total_time:.2f} seconds ({frame_idx / max(total_time, 1e-3):.1f} FPS avg)")
-        print(f"Total Loaded (+1)      : {counter.total_in}")
-        print(f"Total Returned (-1)    : {counter.total_out}")
-        print(f"Net Loaded Count       : {counter.net_count}")
+        print(f"Total Cargo Loaded (+1): {counter.total_in}")
+        print(f"Total Cargo Returned(-1): {counter.total_out}")
+        print(f"Net Cargo Loaded       : {counter.net_count}")
+        print(f"Worker In Trips        : {counter.worker_trips_in}")
+        print(f"Worker Out Trips       : {counter.worker_trips_out}")
         print(f"Total Crossing Events  : {len(counter.events)}")
         if writer:
             print(f"Annotated Video Saved  : {args.output or 'output_truck_loading.mp4'}")
