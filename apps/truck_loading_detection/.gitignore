@@ -1,0 +1,27 @@
+# Large media and video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+raw_4k_backup/
+uploads/
+scratch/
+output_videos/
+
+# Deep learning weights
+*.pt
+*.onnx
+*.engine
+
+# Temporary debug frames
+*.jpg
+*.png
+
+# Environment secrets
+.env
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*.log

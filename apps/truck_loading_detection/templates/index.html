@@ -119,6 +119,18 @@
             color: var(--accent-in);
         }
 
+        .badge-reconnecting {
+            background: rgba(245, 158, 11, 0.15);
+            border-color: rgba(245, 158, 11, 0.35);
+            color: #fbbf24;
+        }
+
+        .badge-error {
+            background: rgba(244, 63, 94, 0.15);
+            border-color: rgba(244, 63, 94, 0.35);
+            color: var(--accent-out);
+        }
+
         .badge-dot {
             width: 8px;
             height: 8px;
@@ -463,6 +475,14 @@
             gap: 0.3rem;
         }
 
+        .event-dir-info {
+            color: #94a3b8;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
         .event-obj {
             color: var(--text-secondary);
         }
@@ -523,9 +543,9 @@
             </div>
         </div>
         <div class="header-badges">
-            <div class="badge badge-live">
+            <div class="badge badge-live" id="connectionBadge">
                 <span class="badge-dot"></span>
-                <span>STREAM ACTIVE</span>
+                <span id="connectionText">LIVE STREAM</span>
             </div>
             <div class="badge" id="sourceBadge">
                 <span>Source: Sample Video</span>
@@ -585,6 +605,7 @@
                         <span>Live Tripwire Monitor Feed</span>
                     </div>
                     <div class="control-group">
+                        <button class="btn" id="btnDirection" onclick="toggleDirection()">🚚 Loading: Left &rarr; Right</button>
                         <button class="btn btn-primary" id="btnPause" onclick="togglePause()">⏸️ Pause</button>
                         <button class="btn" id="btnLoop" onclick="toggleLoop()">🔁 Loop: ON</button>
                         <button class="btn btn-danger" onclick="resetCounts()">🔄 Reset Counts</button>
@@ -593,7 +614,7 @@
 
                 <!-- Video Viewport with Click-to-Move Tripwire -->
                 <div class="video-wrapper" id="videoWrapper" onclick="handleVideoClick(event)">
-                    <img src="/video_feed" class="video-stream" id="videoStream" alt="Live Stream">
+                    <img src="/video_feed" class="video-stream" id="videoStream" alt="Live Stream" onerror="handleStreamError()">
                     <div class="tripwire-hint">💡 Click anywhere on the video to reposition the vertical tripwire line</div>
                 </div>
 
@@ -611,6 +632,49 @@
                     <div class="control-group">
                         <button class="btn" onclick="nudgeLine(-15)">⬅️ Shift Left</button>
                         <button class="btn" onclick="nudgeLine(15)">Shift Right ➡️</button>
+                        <button class="btn" onclick="resetToPresetLine()" style="background: rgba(6, 182, 212, 0.15); border-color: rgba(6, 182, 212, 0.4); color: #38bdf8;" title="Auto-align tripwire to optimal position for this video">🎯 Auto Align</button>
+                    </div>
+            </div>
+
+            <!-- Offline Processed Videos Gallery -->
+            <div class="video-panel" style="margin-top: 1.5rem;">
+                <div class="video-header">
+                    <div class="video-title">
+                        <span>🎬 Processed Scenario Videos (Offline Pipeline)</span>
+                        <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 0.5rem;" id="outputCountBadge">Scanning...</span>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn btn-primary" onclick="processCurrentSourceOffline()">⚡ Process Current Video Offline</button>
+                        <button class="btn" onclick="fetchOutputs()">🔄 Refresh Videos</button>
+                    </div>
+                </div>
+
+                <!-- Offline Processing Progress Banner (if active) -->
+                <div id="offlineJobBanner" style="display: none; padding: 0.85rem 1.25rem; background: rgba(6, 182, 212, 0.1); border-bottom: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem;">
+                        <span id="jobStatusText" style="color: #38bdf8; font-weight: 600;">Processing Video...</span>
+                        <span id="jobPercentText" style="color: var(--text-secondary);">0%</span>
+                    </div>
+                    <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.1); border-radius: 4px; overflow: hidden;">
+                        <div id="jobProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #06b6d4, #10b981); transition: width 0.3s ease;"></div>
+                    </div>
+                </div>
+
+                <!-- Active Video Player for Previewing Outputs -->
+                <div id="offlinePlayerContainer" style="display: none; padding: 1.25rem; background: #000; text-align: center; border-bottom: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <div style="font-weight: 600; font-size: 0.95rem; color: var(--text-primary);" id="playingVideoTitle">Playing Output Video</div>
+                        <button class="btn" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" onclick="closeOfflinePlayer()">✕ Close Preview</button>
+                    </div>
+                    <video id="offlineVideoElem" controls style="max-width: 100%; max-height: 480px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.6);" preload="metadata"></video>
+                </div>
+
+                <!-- Videos Grid / List -->
+                <div style="padding: 1.25rem;">
+                    <div id="outputsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem;">
+                        <div style="color: var(--text-muted); font-size: 0.85rem; grid-column: 1 / -1; text-align: center; padding: 1.5rem;">
+                            Scanning output videos directory...
+                        </div>
                     </div>
                 </div>
             </div>
@@ -626,14 +690,40 @@
                     <span>📹 Video Source</span>
                 </div>
                 <select class="source-select" id="sourceSelect" onchange="changeSource(this.value)">
-                    <option value="sample_truck_loading.mp4">Sample Warehouse Video (Vecteezy)</option>
+                    <option value="">-- No Video Loaded (Upload Below) --</option>
                     <option value="0">USB Webcam / Live Camera (Device 0)</option>
                 </select>
 
-                <div class="file-upload-drop" onclick="document.getElementById('fileInput').click()">
-                    <input type="file" id="fileInput" accept="video/mp4,video/avi,video/mov" onchange="uploadVideo(this)">
+                <div class="file-upload-drop" id="uploadDropArea" onclick="if(event.target.id !== 'fileInput') document.getElementById('fileInput').click()">
+                    <input type="file" id="fileInput" accept="video/*" onchange="uploadVideo(this)">
                     <div>📁 Upload Custom Video</div>
-                    <p>Click to select an MP4 / AVI file from your computer</p>
+                    <p>Click or Drag & Drop a video file (MP4, MOV, AVI, MKV)</p>
+                    
+                    <!-- Live Upload Progress Bar -->
+                    <div id="uploadProgressContainer" style="display: none; width: 100%; margin-top: 0.75rem; text-align: left;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.35rem;">
+                            <span id="uploadStatusText">Uploading...</span>
+                            <span id="uploadPercentText">0%</span>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.1); border-radius: 6px; height: 8px; overflow: hidden; position: relative;">
+                            <div id="uploadProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #06b6d4, #10b981); border-radius: 6px; transition: width 0.15s ease;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Counting Mode Selection -->
+            <div class="panel-card">
+                <div class="panel-title">
+                    <span>🎯 Counting Target Profile</span>
+                </div>
+                <select class="source-select" id="countModeSelect" onchange="changeCountMode(this.value)">
+                    <option value="cartons_only">📦 Cartons & Packages Only (Recommended)</option>
+                    <option value="people_only">👤 People Only (Worker Entry)</option>
+                    <option value="all">🔄 All Detected Objects</option>
+                </select>
+                <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.4;">
+                    Prevents worker double-counting by selectively tallying only loaded cargo.
                 </div>
             </div>
 
@@ -659,9 +749,9 @@
                     <div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
                             <span style="color: var(--text-secondary);">Confidence Threshold</span>
-                            <span id="valConf">0.30</span>
+                            <span id="valConf">0.25</span>
                         </div>
-                        <input type="range" min="0.10" max="0.90" step="0.05" value="0.30" onchange="updateParams('conf', this.value)">
+                        <input type="range" id="inputConf" min="0.10" max="0.90" step="0.05" value="0.25" onchange="updateParams('conf', this.value)">
                     </div>
 
                     <div>
@@ -669,7 +759,7 @@
                             <span style="color: var(--text-secondary);">Hysteresis Margin (px)</span>
                             <span id="valHysteresis">15 px</span>
                         </div>
-                        <input type="range" min="5" max="50" step="5" value="15" onchange="updateParams('hysteresis', this.value)">
+                        <input type="range" id="inputHysteresis" min="5" max="50" step="5" value="15" onchange="updateParams('hysteresis', this.value)">
                     </div>
                 </div>
             </div>
@@ -694,7 +784,30 @@
                 document.getElementById('valReturned').innerText = `-${data.total_out}`;
                 document.getElementById('valNet').innerText = `${data.net_count}`;
                 document.getElementById('valFps').innerText = `${data.fps}`;
-                document.getElementById('valActiveTracks').innerText = `Tracking: ${data.active_count} objs (Frame ${data.frame_idx})`;
+                const tripsStr = (data.worker_trips_in !== undefined) ? ` | Worker Trips: ${data.worker_trips_in}` : '';
+                document.getElementById('valActiveTracks').innerText = `Tracking: ${data.active_count} objs${tripsStr}`;
+
+                // Update connection status badge
+                const connBadge = document.getElementById('connectionBadge');
+                const connText = document.getElementById('connectionText');
+                if (connBadge && connText) {
+                    if (data.connection_status === 'connected') {
+                        connBadge.className = 'badge badge-live';
+                        connText.innerText = 'LIVE STREAM';
+                    } else if (data.connection_status === 'reconnecting') {
+                        connBadge.className = 'badge badge-reconnecting';
+                        connText.innerText = `RECONNECTING (${data.reconnect_attempts})...`;
+                    } else {
+                        connBadge.className = 'badge badge-error';
+                        connText.innerText = 'STREAM OFFLINE';
+                    }
+                }
+
+                // Sync count mode selector
+                const modeSel = document.getElementById('countModeSelect');
+                if (modeSel && data.count_mode && document.activeElement !== modeSel) {
+                    modeSel.value = data.count_mode;
+                }
 
                 videoWidth = data.video_width || 1024;
                 currentLineX = data.line_x;
@@ -710,12 +823,51 @@
                 loopVideo = data.loop_video;
                 document.getElementById('btnLoop').innerHTML = loopVideo ? '🔁 Loop: ON' : '🔁 Loop: OFF';
 
+                // Update direction button label
+                const dirBtn = document.getElementById('btnDirection');
+                if (dirBtn && data.loading_direction) {
+                    dirBtn.innerHTML = (data.loading_direction === 'right_to_left') ? '🚚 Loading: Right &rarr; Left' : '🚚 Loading: Left &rarr; Right';
+                }
+
+                // Sync conf and hysteresis sliders
+                if (data.conf !== undefined) {
+                    const cInput = document.getElementById('inputConf');
+                    if (cInput && document.activeElement !== cInput) {
+                        cInput.value = data.conf;
+                        const cVal = document.getElementById('valConf');
+                        if (cVal) cVal.innerText = Number(data.conf).toFixed(2);
+                    }
+                }
+                if (data.hysteresis !== undefined) {
+                    const hInput = document.getElementById('inputHysteresis');
+                    if (hInput && document.activeElement !== hInput) {
+                        hInput.value = data.hysteresis;
+                        const hVal = document.getElementById('valHysteresis');
+                        if (hVal) hVal.innerText = `${data.hysteresis} px`;
+                    }
+                }
+
                 // Update events table
                 renderEvents(data.events || []);
 
             } catch (err) {
                 console.error('Error fetching stats:', err);
+                const connBadge = document.getElementById('connectionBadge');
+                const connText = document.getElementById('connectionText');
+                if (connBadge && connText) {
+                    connBadge.className = 'badge badge-error';
+                    connText.innerText = 'SERVER OFFLINE';
+                }
             }
+        }
+
+        async function changeCountMode(mode) {
+            await fetch('/api/set_count_mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: mode })
+            });
+            fetchStats();
         }
 
         function renderEvents(events) {
@@ -733,19 +885,35 @@
             let html = '';
             for (const ev of events) {
                 const isIn = ev.direction === 'IN';
-                const dirClass = isIn ? 'event-dir-in' : 'event-dir-out';
-                const dirText = isIn ? '>> LOADED (+1)' : '<< RETURNED (-1)';
+                let dirClass = isIn ? 'event-dir-in' : 'event-dir-out';
+                let dirText = '';
+
+                if (ev.delta === 0) {
+                    dirClass = 'event-dir-info';
+                    dirText = '>> WORKER ENTRY (+0)';
+                } else if (ev.delta > 0) {
+                    dirText = `>> LOADED (+${ev.delta})`;
+                } else {
+                    dirText = `<< RETURNED (${ev.delta})`;
+                }
                 
                 const date = new Date(ev.timestamp * 1000);
                 const timeStr = date.toTimeString().split(' ')[0];
 
+                const carriedBadge = ev.carried_by ? `<span style="font-size: 0.7rem; background: rgba(6, 182, 212, 0.18); color: #38bdf8; border: 1px solid rgba(6, 182, 212, 0.35); padding: 1px 6px; border-radius: 4px; margin-left: 5px;">Worker #${ev.carried_by}</span>` : '';
+                const noteDetail = ev.note ? `<div style="font-size: 0.72rem; color: #94a3b8; margin-top: 3px; font-weight: normal;">${ev.note}</div>` : '';
+
                 html += `
-                    <div class="event-item">
-                        <div>
-                            <span class="${dirClass}">${dirText}</span>
-                            <span class="event-obj">#${ev.track_id} ${ev.class_name.toUpperCase()}</span>
+                    <div class="event-item" style="flex-direction: column; align-items: flex-start;">
+                        <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                            <div>
+                                <span class="${dirClass}">${dirText}</span>
+                                <span class="event-obj">#${ev.track_id} ${ev.class_name.toUpperCase()}</span>
+                                ${carriedBadge}
+                            </div>
+                            <span class="event-time">${timeStr} (Net: ${ev.net_count})</span>
                         </div>
-                        <span class="event-time">${timeStr} (Net: ${ev.net_count})</span>
+                        ${noteDetail}
                     </div>`;
             }
             list.innerHTML = html;
@@ -770,11 +938,32 @@
             setLineX(currentLineX + delta);
         }
 
+        async function resetToPresetLine() {
+            try {
+                const res = await fetch('/api/reset_line_preset', { method: 'POST' });
+                const data = await res.json();
+                if (data.line_x !== undefined) {
+                    currentLineX = data.line_x;
+                    document.getElementById('lineSlider').value = currentLineX;
+                    document.getElementById('sliderVal').innerText = `X = ${currentLineX} px`;
+                }
+                fetchStats();
+            } catch (err) {
+                console.error('Reset line preset error:', err);
+            }
+        }
+
         function handleVideoClick(e) {
             const rect = e.currentTarget.getBoundingClientRect();
             const clickRatioX = (e.clientX - rect.left) / rect.width;
             const computedX = clickRatioX * videoWidth;
             setLineX(computedX);
+        }
+
+        async function toggleDirection() {
+            const res = await fetch('/api/toggle_direction', { method: 'POST' });
+            const data = await res.json();
+            fetchStats();
         }
 
         async function togglePause() {
@@ -796,44 +985,140 @@
             fetchStats();
         }
 
-        async function changeSource(src) {
-            await fetch('/api/set_source', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source: src })
-            });
-            document.getElementById('sourceBadge').innerText = `Source: ${src === '0' ? 'Webcam 0' : src}`;
-            fetchStats();
+        function reloadVideoStream() {
+            const img = document.getElementById('videoStream');
+            if (img) {
+                img.src = '/video_feed?t=' + Date.now();
+            }
         }
 
-        async function uploadVideo(input) {
+        function handleStreamError() {
+            console.warn('Video stream interrupted. Reconnecting in 1 second...');
+            setTimeout(reloadVideoStream, 1000);
+        }
+
+        async function changeSource(src) {
+            try {
+                await fetch('/api/set_source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: src })
+                });
+                const displayName = (!src) ? 'Standby (No Video)' : (src === '0' ? 'Webcam 0' : src.split('/').pop());
+                document.getElementById('sourceBadge').innerText = `Source: ${displayName}`;
+                fetchStats();
+                setTimeout(reloadVideoStream, 150);
+            } catch (err) {
+                console.error('Source change error:', err);
+            }
+        }
+
+        function uploadVideo(input) {
             if (!input.files || input.files.length === 0) return;
-            const file = input.files[0];
+            handleFileUpload(input.files[0]);
+            input.value = '';
+        }
+
+        function handleFileUpload(file) {
+            if (!file) return;
             const formData = new FormData();
             formData.append('video', file);
 
-            document.getElementById('sourceBadge').innerText = `Uploading: ${file.name}...`;
+            const badge = document.getElementById('sourceBadge');
+            const progressContainer = document.getElementById('uploadProgressContainer');
+            const progressBar = document.getElementById('uploadProgressBar');
+            const percentText = document.getElementById('uploadPercentText');
+            const statusText = document.getElementById('uploadStatusText');
 
-            try {
-                const res = await fetch('/api/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await res.json();
-                if (data.success) {
-                    document.getElementById('sourceBadge').innerText = `Source: ${data.filename}`;
-                    
-                    // Add option to select dropdown
-                    const sel = document.getElementById('sourceSelect');
-                    const opt = document.createElement('option');
-                    opt.value = data.source;
-                    opt.innerText = `Uploaded: ${data.filename}`;
-                    opt.selected = true;
-                    sel.appendChild(opt);
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            percentText.innerText = '0%';
+            statusText.innerText = 'Uploading...';
+            badge.innerText = `⏳ Uploading: ${file.name}...`;
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload', true);
+
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    progressBar.style.width = percent + '%';
+                    percentText.innerText = percent + '%';
+                    if (percent >= 100) {
+                        statusText.innerText = 'Initializing stream...';
+                    }
                 }
-            } catch (err) {
-                alert('Upload failed: ' + err.message);
-            }
+            };
+
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        if (data.success) {
+                            progressBar.style.width = '100%';
+                            percentText.innerText = '100%';
+                            statusText.innerText = 'Ready!';
+                            badge.innerText = `Source: ${data.filename}`;
+
+                            // Add option to select dropdown and select it
+                            const sel = document.getElementById('sourceSelect');
+                            const opt = document.createElement('option');
+                            opt.value = data.source;
+                            opt.innerText = `Uploaded: ${data.filename}`;
+                            opt.selected = true;
+                            sel.appendChild(opt);
+
+                            setTimeout(() => {
+                                progressContainer.style.display = 'none';
+                                progressBar.style.width = '0%';
+                            }, 1500);
+
+                            // Force immediate video stream reload
+                            setTimeout(reloadVideoStream, 200);
+                            fetchStats();
+                        } else {
+                            alert('Upload failed: ' + (data.error || 'Server error'));
+                            badge.innerText = 'Upload failed';
+                            progressContainer.style.display = 'none';
+                        }
+                    } catch (e) {
+                        alert('Upload failed: Invalid server response');
+                        progressContainer.style.display = 'none';
+                    }
+                } else {
+                    alert('Upload error: HTTP ' + xhr.status);
+                    badge.innerText = 'Upload failed';
+                    progressContainer.style.display = 'none';
+                }
+            };
+
+            xhr.onerror = function() {
+                alert('Upload failed: Network error');
+                badge.innerText = 'Upload error';
+                progressContainer.style.display = 'none';
+            };
+
+            xhr.send(formData);
+        }
+
+        // Drag and drop event listeners
+        const dropBox = document.getElementById('uploadDropArea');
+        if (dropBox) {
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(name => {
+                dropBox.addEventListener(name, (e) => { e.preventDefault(); e.stopPropagation(); }, false);
+            });
+            ['dragenter', 'dragover'].forEach(name => {
+                dropBox.addEventListener(name, () => { dropBox.style.borderColor = 'var(--accent-net)'; }, false);
+            });
+            ['dragleave', 'drop'].forEach(name => {
+                dropBox.addEventListener(name, () => { dropBox.style.borderColor = ''; }, false);
+            });
+            dropBox.addEventListener('drop', (e) => {
+                const dt = e.dataTransfer;
+                if (dt && dt.files && dt.files.length > 0) {
+                    handleFileUpload(dt.files[0]);
+                }
+            }, false);
         }
 
         async function updateParams(key, val) {
@@ -852,6 +1137,172 @@
         // Start polling
         setInterval(fetchStats, 350);
         fetchStats();
+
+        // -------------------------------------------------------------
+        // Offline Output Videos Gallery & Processing
+        // -------------------------------------------------------------
+        let currentOfflineVideos = [];
+        let activeJobId = null;
+
+        async function fetchOutputs() {
+            try {
+                const res = await fetch('/api/outputs');
+                const data = await res.json();
+                currentOfflineVideos = data.videos || [];
+                renderOutputsGrid(currentOfflineVideos);
+            } catch (e) {
+                console.error('Error fetching outputs:', e);
+            }
+        }
+
+        function renderOutputsGrid(videos) {
+            const grid = document.getElementById('outputsGrid');
+            const badge = document.getElementById('outputCountBadge');
+            badge.innerText = `${videos.length} videos ready`;
+
+            if (videos.length === 0) {
+                grid.innerHTML = `<div style="color: var(--text-muted); font-size: 0.85rem; grid-column: 1 / -1; text-align: center; padding: 2rem;">No processed videos found. Run batch processing or click "Process Current Video Offline" above.</div>`;
+                return;
+            }
+
+            grid.innerHTML = videos.map(v => {
+                const netBadge = (v.net_count !== null && v.net_count !== undefined) 
+                    ? `<span style="background: rgba(6, 182, 212, 0.15); color: #38bdf8; padding: 2px 8px; border-radius: 6px; font-weight: 600; font-size: 0.8rem;">Net: ${v.net_count}</span>` 
+                    : '';
+                const loadedBadge = (v.total_in !== null && v.total_in !== undefined)
+                    ? `<span style="background: rgba(16, 185, 129, 0.15); color: #10b981; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem;">+${v.total_in} In</span>`
+                    : '';
+                const returnedBadge = (v.total_out !== null && v.total_out !== undefined && v.total_out > 0)
+                    ? `<span style="background: rgba(244, 63, 94, 0.15); color: #f43f5e; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem;">-${v.total_out} Out</span>`
+                    : '';
+                const tripsBadge = (v.worker_trips !== null && v.worker_trips !== undefined)
+                    ? `<span style="background: rgba(234, 179, 8, 0.15); color: #eab308; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem;">Trips: ${v.worker_trips}</span>`
+                    : '';
+
+                return `
+                    <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 12px; padding: 1rem; display: flex; flex-direction: column; justify-content: space-between; gap: 0.75rem;">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.4rem;">
+                                <div style="font-weight: 600; font-size: 0.9rem; color: #f8fafc; word-break: break-all;">🎬 ${v.orig_name || v.filename}</div>
+                                <span style="font-size: 0.75rem; color: var(--text-muted);">${v.size_mb} MB</span>
+                            </div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem;">
+                                ${netBadge}
+                                ${loadedBadge}
+                                ${returnedBadge}
+                                ${tripsBadge}
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; margin-top: 0.25rem;">
+                            <button class="btn btn-primary" style="flex: 1; padding: 0.45rem 0.5rem; font-size: 0.8rem;" onclick="playOfflineVideo('${v.url}', '${v.orig_name || v.filename}')">▶️ Play Video</button>
+                            <a href="${v.url}" download="${v.filename}" class="btn" style="text-decoration: none; padding: 0.45rem 0.65rem; font-size: 0.8rem; display: flex; align-items: center; justify-content: center;" title="Download MP4">⬇️</a>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function playOfflineVideo(url, title) {
+            const container = document.getElementById('offlinePlayerContainer');
+            const videoElem = document.getElementById('offlineVideoElem');
+            const titleElem = document.getElementById('playingVideoTitle');
+
+            titleElem.innerText = `🎬 Output Video: ${title}`;
+            videoElem.src = url;
+            container.style.display = 'block';
+            videoElem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            videoElem.play();
+        }
+
+        function closeOfflinePlayer() {
+            const container = document.getElementById('offlinePlayerContainer');
+            const videoElem = document.getElementById('offlineVideoElem');
+            videoElem.pause();
+            videoElem.src = '';
+            container.style.display = 'none';
+        }
+
+        async function processCurrentSourceOffline() {
+            const select = document.getElementById('sourceSelect');
+            const videoVal = select ? select.value : '';
+            if (!videoVal || videoVal === '0') {
+                alert('Please select a valid warehouse video from the Video Source dropdown or upload a video first.');
+                return;
+            }
+
+            const videoName = videoVal.split('/').pop();
+            const banner = document.getElementById('offlineJobBanner');
+            const statusText = document.getElementById('jobStatusText');
+            const percentText = document.getElementById('jobPercentText');
+            const progressBar = document.getElementById('jobProgressBar');
+
+            banner.style.display = 'block';
+            statusText.innerText = `Submitting ${videoName} for offline processing...`;
+            percentText.innerText = '0%';
+            progressBar.style.width = '0%';
+
+            try {
+                const res = await fetch('/api/process_offline_video', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_name: videoName })
+                });
+                const data = await res.json();
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    banner.style.display = 'none';
+                    return;
+                }
+                activeJobId = data.job_id;
+                pollJobStatus(activeJobId);
+            } catch (e) {
+                alert('Failed to start offline processing: ' + e);
+                banner.style.display = 'none';
+            }
+        }
+
+        function pollJobStatus(jobId) {
+            const banner = document.getElementById('offlineJobBanner');
+            const statusText = document.getElementById('jobStatusText');
+            const percentText = document.getElementById('jobPercentText');
+            const progressBar = document.getElementById('jobProgressBar');
+
+            const timer = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/job_status/${jobId}`);
+                    const job = await res.json();
+                    if (!job || job.error) {
+                        clearInterval(timer);
+                        banner.style.display = 'none';
+                        return;
+                    }
+
+                    if (job.status === 'processing') {
+                        statusText.innerText = `Processing ${job.video_name} (Frame ${job.current_frame}/${job.total_frames})...`;
+                        percentText.innerText = `${job.progress_pct}%`;
+                        progressBar.style.width = `${job.progress_pct}%`;
+                    } else if (job.status === 'completed') {
+                        clearInterval(timer);
+                        statusText.innerText = `✅ Completed: ${job.video_name} (Net Count: ${job.result ? job.result.net_count : 'N/A'})`;
+                        percentText.innerText = '100%';
+                        progressBar.style.width = '100%';
+                        fetchOutputs();
+                        setTimeout(() => { banner.style.display = 'none'; }, 4000);
+                    } else if (job.status === 'failed') {
+                        clearInterval(timer);
+                        statusText.innerText = `❌ Failed: ${job.error || 'Unknown error'}`;
+                        statusText.style.color = '#f43f5e';
+                        setTimeout(() => { banner.style.display = 'none'; }, 5000);
+                    }
+                } catch (e) {
+                    console.error('Job poll error:', e);
+                }
+            }, 1000);
+        }
+
+        // Initialize outputs gallery
+        fetchOutputs();
+        setInterval(fetchOutputs, 5000);
     </script>
 </body>
 </html>
