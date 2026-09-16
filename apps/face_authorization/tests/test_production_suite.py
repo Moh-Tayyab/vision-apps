@@ -179,6 +179,69 @@ class TestFaceAuthorizationProduction(unittest.TestCase):
         self.assertIn("events", body)
         self.assertIsInstance(body["events"], list)
 
+        # 5. Calibration Metrics Endpoint
+        res_calib = self.client.get("/api/calibrate/metrics")
+        self.assertEqual(res_calib.status_code, 200)
+        calib_body = res_calib.json()
+        self.assertIn("current_cosine_threshold", calib_body)
+        self.assertIn("inference_max_width", calib_body)
+        self.assertEqual(calib_body["inference_max_width"], 960)
+
+    def test_anti_spoofing_float_and_uint8(self):
+        # Create a valid synthetic skin patch
+        patch_uint8 = np.ones((160, 160, 3), dtype=np.uint8) * 180
+        # Add gradient variation
+        for i in range(160):
+            patch_uint8[i, :, 0] = np.clip(130 + i // 3, 0, 255)
+            patch_uint8[:, i, 1] = np.clip(150 + i // 4, 0, 255)
+
+        # uint8 test
+        res_uint8 = self.anti_spoof.check_liveness(patch_uint8)
+        self.assertIsInstance(res_uint8.liveness_score, float)
+
+        # float64 test [0.0, 1.0] (as returned by DeepFace extract_faces)
+        patch_float = patch_uint8.astype(np.float64) / 255.0
+        res_float = self.anti_spoof.check_liveness(patch_float)
+        self.assertIsInstance(res_float.liveness_score, float)
+        # Scores should be virtually identical
+        self.assertAlmostEqual(res_uint8.liveness_score, res_float.liveness_score, delta=0.05)
+
+    def test_kfold_calibration_engine(self):
+        from apps.face_authorization.calibration import ThresholdCalibrator
+
+        calibrator = ThresholdCalibrator(k_folds=3, target_metric="eer")
+        
+        # Synthetic person embeddings (dim=128)
+        rng = np.random.default_rng(42)
+        base_p1 = rng.normal(0, 1, 128).astype(np.float32)
+        base_p1 /= np.linalg.norm(base_p1)
+
+        base_p2 = rng.normal(0, 1, 128).astype(np.float32)
+        base_p2 /= np.linalg.norm(base_p2)
+
+        # Person 1 embeddings with small noise (distance ~ 0.05 - 0.15)
+        p1_samples = [base_p1 + rng.normal(0, 0.05, 128).astype(np.float32) for _ in range(5)]
+        p1_samples = [v / np.linalg.norm(v) for v in p1_samples]
+
+        # Person 2 embeddings with small noise
+        p2_samples = [base_p2 + rng.normal(0, 0.05, 128).astype(np.float32) for _ in range(5)]
+        p2_samples = [v / np.linalg.norm(v) for v in p2_samples]
+
+        person_embeddings = {
+            "Person_A": p1_samples,
+            "Person_B": p2_samples,
+        }
+
+        report = calibrator.run_kfold_calibration(person_embeddings)
+        self.assertEqual(report.k_folds, 3)
+        self.assertEqual(report.num_persons, 2)
+        self.assertGreater(report.num_genuine_pairs, 0)
+        self.assertGreater(report.num_imposter_pairs, 0)
+        self.assertGreater(report.auc_roc, 0.85)
+        self.assertGreater(report.recommended_threshold, 0.15)
+        self.assertLess(report.recommended_threshold, 0.75)
+
 
 if __name__ == "__main__":
     unittest.main()
+

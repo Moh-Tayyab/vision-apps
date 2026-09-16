@@ -58,7 +58,7 @@ _CAMERA_TRANSFORM: str = os.getenv("CAMERA_TRANSFORM", "none")
 MIN_FACE_SIZE: int = int(os.getenv("MIN_FACE_SIZE", "14"))
 DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.22"))
 COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.48"))
-INFERENCE_MAX_WIDTH: int = int(os.getenv("INFERENCE_MAX_WIDTH", "720"))
+INFERENCE_MAX_WIDTH: int = int(os.getenv("INFERENCE_MAX_WIDTH", "960"))
 
 # Detection Cache & Async Inference
 _detection_lock = threading.Lock()
@@ -189,7 +189,29 @@ def _verify_frame(
         if fw < min_size or fh < min_size or confidence < min_conf:
             continue
 
-        face_crop = face["face"]
+        # Extract high-resolution face crop from original un-downscaled image
+        # with a 12% safety margin to ensure full facial features even for distant faces
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(w, x + fw)
+        y2 = min(h, y + fh)
+
+        pad_x = int(fw * 0.12)
+        pad_y = int(fh * 0.12)
+        crop_x1 = max(0, x1 - pad_x)
+        crop_y1 = max(0, y1 - pad_y)
+        crop_x2 = min(w, x2 + pad_x)
+        crop_y2 = min(h, y2 + pad_y)
+
+        orig_crop = image[crop_y1:crop_y2, crop_x1:crop_x2]
+        if orig_crop.size > 0:
+            face_crop = orig_crop
+        else:
+            raw_crop = face["face"]
+            if np.issubdtype(raw_crop.dtype, np.floating) and raw_crop.max() <= 1.05:
+                face_crop = (raw_crop * 255.0).astype(np.uint8)
+            else:
+                face_crop = raw_crop.astype(np.uint8)
 
         # Step 1: Passive Liveness & Anti-Spoofing Check
         liveness_res = anti_spoof.check_liveness(face_crop) if check_liveness else None
@@ -197,7 +219,7 @@ def _verify_frame(
         liveness_score = liveness_res.liveness_score if liveness_res else 1.0
 
         entry = {
-            "bbox": [x, y, x + fw, y + fh],
+            "bbox": [x1, y1, x2, y2],
             "confidence": round(confidence, 3),
             "liveness_score": liveness_score,
             "is_live": is_live,
@@ -437,20 +459,20 @@ async def update_sensitivity_settings(
     if preset:
         p = preset.lower().strip()
         if p in ("long_distance", "far", "high_sensitivity"):
-            MIN_FACE_SIZE = 14
-            DETECTION_CONFIDENCE = 0.20
+            MIN_FACE_SIZE = 12
+            DETECTION_CONFIDENCE = 0.18
             COSINE_MATCH_THRESHOLD = 0.50
-            INFERENCE_MAX_WIDTH = 720
+            INFERENCE_MAX_WIDTH = 1080
         elif p in ("balanced", "medium", "standard"):
-            MIN_FACE_SIZE = 16
-            DETECTION_CONFIDENCE = 0.25
+            MIN_FACE_SIZE = 14
+            DETECTION_CONFIDENCE = 0.22
             COSINE_MATCH_THRESHOLD = 0.48
-            INFERENCE_MAX_WIDTH = 720
+            INFERENCE_MAX_WIDTH = 960
         elif p in ("strict", "close", "high_security"):
-            MIN_FACE_SIZE = 30
-            DETECTION_CONFIDENCE = 0.45
+            MIN_FACE_SIZE = 28
+            DETECTION_CONFIDENCE = 0.40
             COSINE_MATCH_THRESHOLD = 0.40
-            INFERENCE_MAX_WIDTH = 640
+            INFERENCE_MAX_WIDTH = 720
         else:
             raise HTTPException(status_code=422, detail=f"Unknown preset '{preset}'. Choose: long_distance | balanced | strict")
 
@@ -474,6 +496,49 @@ async def update_sensitivity_settings(
             "inference_max_width": INFERENCE_MAX_WIDTH,
             "detector_backend": DETECTOR_BACKEND,
         },
+    }
+
+
+# ---------------- K-Fold Threshold Calibration ----------------
+
+
+@app.post("/api/calibrate", dependencies=[Depends(verify_admin_access)])
+async def calibrate_threshold(
+    k_folds: int = Form(5, ge=2, le=20),
+    target_metric: str = Form("eer", description="eer | f1 | youden | accuracy | high_security"),
+    apply_calibrated: bool = Form(True, description="Automatically update system threshold if calibrated"),
+):
+    """Run Stratified K-Fold Cross-Validation Threshold Calibration on currently enrolled persons."""
+    from calibration import calibrate_from_db
+
+    try:
+        report = calibrate_from_db(DB_PATH, k_folds=k_folds, target_metric=target_metric)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Calibration error: {e}")
+
+    global COSINE_MATCH_THRESHOLD
+    if apply_calibrated:
+        COSINE_MATCH_THRESHOLD = float(report.recommended_threshold)
+        _get_engine().threshold = float(report.recommended_threshold)
+
+    return {
+        "status": "calibrated",
+        "applied": apply_calibrated,
+        "recommended_threshold": report.recommended_threshold,
+        "report": report.to_dict(),
+    }
+
+
+@app.get("/api/calibrate/metrics")
+async def get_calibration_info():
+    """Retrieve current verification threshold and engine parameters."""
+    engine = _get_engine()
+    return {
+        "current_cosine_threshold": round(engine.threshold, 4),
+        "detector_backend": DETECTOR_BACKEND,
+        "inference_max_width": INFERENCE_MAX_WIDTH,
+        "min_face_size": MIN_FACE_SIZE,
+        "detection_confidence": DETECTION_CONFIDENCE,
     }
 
 
