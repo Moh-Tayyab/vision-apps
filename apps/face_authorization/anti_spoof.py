@@ -43,11 +43,22 @@ class AntiSpoofEngine:
 
     def check_liveness(self, face_bgr: np.ndarray) -> AntiSpoofResult:
         """Evaluate whether a cropped face is a live human or a 2D presentation attack (screen/photo)."""
-        if face_bgr is None or face_bgr.size == 0 or face_bgr.shape[0] < 10 or face_bgr.shape[1] < 10:
+        if face_bgr is None or face_bgr.size == 0 or face_bgr.shape[0] < 8 or face_bgr.shape[1] < 8:
             return AntiSpoofResult(is_real=False, liveness_score=0.0, confidence=0.0, details={"error": "invalid_crop"})
 
+        orig_h, orig_w = face_bgr.shape[:2]
+
+        # Standardize to uint8 [0, 255] BGR regardless of input dtype (e.g. float64 from DeepFace)
+        if np.issubdtype(face_bgr.dtype, np.floating):
+            if face_bgr.max() <= 1.05:
+                face_norm = np.clip(face_bgr * 255.0, 0, 255).astype(np.uint8)
+            else:
+                face_norm = np.clip(face_bgr, 0, 255).astype(np.uint8)
+        else:
+            face_norm = face_bgr.astype(np.uint8)
+
         # Standardize face crop to 160x160 for uniform statistical texture analysis
-        crop = cv2.resize(face_bgr, (160, 160), interpolation=cv2.INTER_LINEAR)
+        crop = cv2.resize(face_norm, (160, 160), interpolation=cv2.INTER_LINEAR)
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 
         # Cue 1: Chrominance & Skin Reflectance Variance (YCrCb & HSV)
@@ -64,10 +75,10 @@ class AntiSpoofEngine:
         # Cue 2: High-Frequency Laplacian & Gradient Texture
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
         lap_var = float(laplacian.var())
-        # Extremely low laplacian (< 60) indicates flat paper / blurry print;
-        # Extremely high laplacian (> 3500) indicates digital screen pixel grid / moiré noise
-        if lap_var < 60.0:
-            texture_score = np.clip(lap_var / 60.0, 0.0, 0.6)
+        # Distance-adaptive lower threshold: smaller/distant crops (< 60px) naturally have lower laplacian
+        min_lap_thresh = 35.0 if min(orig_h, orig_w) < 60 else 60.0
+        if lap_var < min_lap_thresh:
+            texture_score = np.clip(lap_var / min_lap_thresh, 0.0, 0.7)
         elif lap_var > 3500.0:
             texture_score = np.clip(1.0 - ((lap_var - 3500.0) / 4000.0), 0.1, 0.8)
         else:

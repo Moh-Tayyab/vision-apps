@@ -112,20 +112,39 @@ class FaceEngine:
     def list_persons(self) -> List[dict]:
         return self.db.list_persons()
 
-    def identify_face(self, face_bgr: np.ndarray, threshold: Optional[float] = None) -> Optional[dict]:
-        """Extract query vector and search in Database / Qdrant vector index."""
+    def extract_embedding(self, face_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Extract L2-normalized 1D feature embedding vector from a cropped face image."""
+        if face_bgr is None or face_bgr.size == 0:
+            return None
         from deepface import DeepFace
 
-        eff_threshold = self.threshold if threshold is None else float(threshold)
+        # Ensure standard uint8 BGR
+        if np.issubdtype(face_bgr.dtype, np.floating):
+            if face_bgr.max() <= 1.05:
+                inp = np.clip(face_bgr * 255.0, 0, 255).astype(np.uint8)
+            else:
+                inp = np.clip(face_bgr, 0, 255).astype(np.uint8)
+        else:
+            inp = face_bgr.astype(np.uint8)
 
         rep = DeepFace.represent(
-            img_path=face_bgr,
+            img_path=inp,
             model_name=MODEL_NAME,
             detector_backend="skip",
             enforce_detection=False,
         )
         if not rep or not rep[0].get("embedding"):
             return None
+        vec = np.asarray(rep[0]["embedding"], dtype=np.float32)
+        norm = np.linalg.norm(vec)
+        if norm > 1e-8:
+            vec = vec / norm
+        return vec
 
-        query = np.asarray(rep[0]["embedding"], dtype=np.float32)
+    def identify_face(self, face_bgr: np.ndarray, threshold: Optional[float] = None) -> Optional[dict]:
+        """Extract query vector and search in Database / Qdrant vector index."""
+        eff_threshold = self.threshold if threshold is None else float(threshold)
+        query = self.extract_embedding(face_bgr)
+        if query is None:
+            return None
         return self.db.search_face(query, threshold=eff_threshold)
