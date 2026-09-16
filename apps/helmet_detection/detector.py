@@ -44,12 +44,55 @@ class Box:
     def cy(self) -> float:
         return (self.y1 + self.y2) / 2
 
-    def contains(self, other: "Box", top_frac: float = 0.7) -> bool:
-        """True if ``other``'s center lies inside the top part of this box."""
-        return (
-            self.x1 <= other.cx <= self.x2
-            and self.y1 <= other.cy <= self.y1 + (self.y2 - self.y1) * top_frac
-        )
+    def contains(self, other: "Box", top_frac: float = 0.75, margin_ratio: float = 0.15) -> bool:
+        """True if other's center or body lies inside the upper torso/head region of this box.
+        
+        Includes margin tolerance for tilted heads and helmets resting above person boundary.
+        """
+        bw = self.x2 - self.x1
+        bh = self.y2 - self.y1
+        margin_x = bw * margin_ratio
+        margin_y_top = bh * margin_ratio
+
+        # Upper region bound
+        x_min = self.x1 - margin_x
+        x_max = self.x2 + margin_x
+        y_min = self.y1 - margin_y_top
+        y_max = self.y1 + bh * top_frac
+
+        # 1. Check center point containment with margin tolerance
+        if x_min <= other.cx <= x_max and y_min <= other.cy <= y_max:
+            return True
+
+        # 2. Check overlap between other box and top region of self
+        inter_x1 = max(self.x1, other.x1)
+        inter_y1 = max(y_min, other.y1)
+        inter_x2 = min(self.x2, other.x2)
+        inter_y2 = min(y_max, other.y2)
+
+        if inter_x2 > inter_x1 and inter_y2 > inter_y1:
+            inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+            other_area = max(1e-5, (other.x2 - other.x1) * (other.y2 - other.y1))
+            if (inter_area / other_area) >= 0.20:
+                return True
+
+        return False
+
+    def overlaps(self, other: "Box", min_iou: float = 0.15) -> bool:
+        """Calculate Intersection over Union (IoU) between two boxes."""
+        inter_x1 = max(self.x1, other.x1)
+        inter_y1 = max(self.y1, other.y1)
+        inter_x2 = min(self.x2, other.x2)
+        inter_y2 = min(self.y2, other.y2)
+
+        if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+            return False
+
+        inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+        area1 = (self.x2 - self.x1) * (self.y2 - self.y1)
+        area2 = (other.x2 - other.x1) * (other.y2 - other.y1)
+        union_area = area1 + area2 - inter_area
+        return (inter_area / max(union_area, 1e-6)) >= min_iou
 
 
 @dataclass
@@ -211,8 +254,12 @@ class HelmetDetector:
         unmatched_helmets = [h for h in helmets if id(h) not in matched_helmets]
 
         for hd in unmatched_heads:
-            # Check if covered by an unmatched helmet
-            covered = any(h.x1 <= hd.cx <= h.x2 and h.y1 <= hd.cy <= h.y2 for h in unmatched_helmets)
+            # Check if covered by an unmatched helmet (via IoU overlap or center point)
+            covered = any(
+                h.overlaps(hd, min_iou=0.10)
+                or (h.x1 - 12 <= hd.cx <= h.x2 + 12 and h.y1 - 15 <= hd.cy <= h.y2 + 15)
+                for h in unmatched_helmets
+            )
             persons.append(
                 PersonStatus(
                     [hd.x1, hd.y1, hd.x2, hd.y2],
@@ -223,7 +270,12 @@ class HelmetDetector:
 
         for h in unmatched_helmets:
             # If not already matched to an unmatched head
-            if not any(h.x1 <= hd.cx <= h.x2 and h.y1 <= hd.cy <= h.y2 for hd in unmatched_heads):
+            is_matched = any(
+                h.overlaps(hd, min_iou=0.10)
+                or (h.x1 - 12 <= hd.cx <= h.x2 + 12 and h.y1 - 15 <= hd.cy <= h.y2 + 15)
+                for hd in unmatched_heads
+            )
+            if not is_matched:
                 persons.append(
                     PersonStatus(
                         [h.x1, h.y1, h.x2, h.y2],
