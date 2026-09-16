@@ -3,7 +3,7 @@
 ## Project Overview
 Count cartons on pallet using YOLO detection with multi-angle fusion.
 
-## Senior Requirements (Muhammad Usama)
+## Requirements
 - 3 independent apps: Carton Counter, Helmet Detection, Face Authorization
 - Start with Carton Counter (App 1)
 - Use COCO pre-trained YOLO (no training needed for MVP)
@@ -84,7 +84,7 @@ Camera 3 (Top)    → YOLO Detect → Detections_3 ─┘
 5. Build App 3 (Face Authorization)
 6. Docker Compose for all 3 apps
 
-## Senior's Key Points
+## Key Points
 - "Try to work separately - one app at a time"
 - "For carton detection, assume cameras will be set up by us in production"
 - "Cartons can be of different sizes on a pellet"
