@@ -54,5 +54,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # Production: use gunicorn. For single-worker real-time processing, 1 worker is correct
 # (the inference thread is the bottleneck, not request concurrency).
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", \
-     "--timeout", "120", "--keep-alive", "5", "--access-logfile", "-", \
-     "--error-logfile", "-", "app:app", "--preload"]
+    "--timeout", "120", "--keep-alive", "5", "--access-logfile", "-", \
+    "--error-logfile", "-", "app:app", "--preload"]
