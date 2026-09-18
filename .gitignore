@@ -40,6 +40,8 @@ Thumbs.db
 *.ts
 *.part
 cloudflared
+*.zip
+!apps/top_camera_counter/dataset.zip
 
 # Tests outputs & cache
 tests/inference_cache.json
