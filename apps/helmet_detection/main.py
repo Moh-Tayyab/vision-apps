@@ -82,6 +82,20 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
+def _get_usb_ip() -> Optional[str]:
+    import socket
+    try:
+        import psutil
+        for iface, addrs in psutil.net_if_addrs().items():
+            if iface.startswith("enx") or iface.startswith("usb") or "rndis" in iface.lower():
+                for a in addrs:
+                    if a.family == socket.AF_INET and not a.address.startswith("127."):
+                        return a.address
+    except Exception:
+        pass
+    return None
+
+
 def _read_image(file_bytes: bytes) -> np.ndarray:
     img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
@@ -751,6 +765,7 @@ async def mobile_page():
 @app.get("/", response_class=HTMLResponse)
 async def root():
     local_ip = _get_local_ip()
+    usb_ip = _get_usb_ip()
     port = int(os.getenv("PORT", "8002"))
     https_port = int(os.getenv("HTTPS_PORT", "8444"))
     return f"""
@@ -1150,14 +1165,17 @@ async def root():
                     </div>
 
                     <div style="background: #020617; border-radius: 10px; padding: 14px; border: 1px solid #1e293b;">
-                        <div style="margin-bottom: 8px;">
-                            <span style="color: #94a3b8;">🔒 Public HTTPS Cloudflare Tunnel:</span><br>
-                            <a id="tunnelLink" href="/mobile" target="_blank" style="color: #38bdf8; font-size: 1.05rem; font-weight: bold; text-decoration: none;">
-                                /mobile
+                        {f'''<div style="margin-bottom: 12px; background: rgba(34, 197, 94, 0.15); border: 1px solid #22c55e; padding: 10px; border-radius: 8px;">
+                            <span style="color: #4ade80; font-weight: bold;">⚡ USB Cable Direct Link (Zero Latency):</span><br>
+                            <a href="https://{usb_ip}:{https_port}/mobile" target="_blank" style="color: #38bdf8; font-size: 1.1rem; font-weight: bold; text-decoration: underline;">
+                                https://{usb_ip}:{https_port}/mobile
                             </a>
+                        </div>''' if usb_ip else ''}
+                        <div style="font-size: 0.88rem; color: #94a3b8; margin-bottom: 4px;">
+                            📶 Wi-Fi HTTPS: <a href="https://{local_ip}:{https_port}/mobile" target="_blank" style="color: #38bdf8; font-weight: 600;">https://{local_ip}:{https_port}/mobile</a>
                         </div>
                         <div style="font-size: 0.82rem; color: #64748b;">
-                            Local Wi-Fi: <a href="http://{local_ip}:{port}/mobile" target="_blank" style="color: #94a3b8;">http://{local_ip}:{port}/mobile</a> | HTTPS: <a href="https://{local_ip}:{https_port}/mobile" target="_blank" style="color: #94a3b8;">https://{local_ip}:{https_port}/mobile</a>
+                            Wi-Fi HTTP: <a href="http://{local_ip}:{port}/mobile" target="_blank" style="color: #94a3b8;">http://{local_ip}:{port}/mobile</a>
                         </div>
                     </div>
                 </div>

@@ -14,12 +14,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL -o yolo26n.pt \
-       https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt
+    https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt
 
 COPY . .
 
-ENV MODEL_PATH=best.pt
-ENV CONF_THRESHOLD=0.38
+ENV MODEL_PATH=ppe-detection-best.pt
+ENV CONF_THRESHOLD=0.35
 ENV PORT=8002
 
 EXPOSE 8002

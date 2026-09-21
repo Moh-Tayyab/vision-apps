@@ -44,6 +44,13 @@ class TestHelmetDetectionTuning(unittest.TestCase):
         self.assertEqual(d["status"], "no_helmet")
         self.assertEqual(d["confidence"], 0.92)
 
+    def test_two_class_model_info(self):
+        detector = HelmetDetector()
+        info = detector.get_model_info()
+        self.assertEqual(info["configured_classes"], ["helmet", "no-helmet"])
+        self.assertIn("human", info["ignored_classes"])
+        self.assertIn("vest", info["ignored_classes"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -175,16 +175,19 @@ class HelmetDetector:
     """Performs helmet and safety compliance detection using local trained YOLO model."""
 
     def __init__(self, model_path: Optional[str] = None, conf_threshold: Optional[float] = None, imgsz: Optional[int] = None):
-        conf = conf_threshold if conf_threshold is not None else float(os.getenv("CONF_THRESHOLD", "0.38"))
+        conf = conf_threshold if conf_threshold is not None else float(os.getenv("CONF_THRESHOLD", "0.35"))
         imgsz_val = imgsz if imgsz is not None else int(os.getenv("IMGSZ", "640"))
 
-        chosen_path = model_path or os.getenv("MODEL_PATH", "best.pt")
+        chosen_path = model_path or os.getenv("MODEL_PATH", "ppe-detection-best.pt")
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
         # Check candidate model paths
         candidates = [
             chosen_path if os.path.isabs(chosen_path) else os.path.join(base_dir, chosen_path),
+            os.path.abspath(chosen_path),
+            os.path.join(base_dir, "ppe-detection-best.pt"),
             os.path.join(base_dir, "best.pt"),
+            os.path.join(base_dir, "safety_helmet_251209.pt"),
             os.path.join(base_dir, "helmet_yolo.pt"),
             os.path.join(base_dir, "yolov8m-hard-hat-detection.pt"),
         ]
@@ -206,92 +209,66 @@ class HelmetDetector:
     @property
     def backend(self) -> str:
         return self._backend
-        return self._backend
 
     def detect(self, image: np.ndarray, confidence: Optional[float] = None) -> FrameResult:
         start = time.perf_counter()
         raw = self._detector.detect_boxes(image, confidence=confidence)
         elapsed_ms = (time.perf_counter() - start) * 1000
 
+        # Strict 2-class enforcement: only process helmet and no-helmet classes
+        # All other classes (such as human, vest, person) are completely ignored as requested
         helmets = [b for b in raw if b.class_name in HELMET_CLASSES]
-        heads = [b for b in raw if b.class_name in HEAD_CLASSES]
-        caps = [b for b in raw if b.class_name in CAP_CLASSES]
+        heads = [b for b in raw if b.class_name in HEAD_CLASSES or b.class_name in CAP_CLASSES]
 
-        matched_helmets = set()
-        matched_heads = set()
-        persons: List[PersonStatus] = []
+        # Valid raw boxes strictly limited to the 2 target classes
+        valid_raw = [b for b in raw if b.class_name in HELMET_CLASSES or b.class_name in HEAD_CLASSES or b.class_name in CAP_CLASSES]
 
-        # 1. Match against detected person bounding boxes
-        for b in raw:
-            if b.class_name not in PERSON_CLASSES:
-                continue
-
-            person_helmets = [h for h in helmets if b.contains(h)]
-            person_heads = [hd for hd in heads if b.contains(hd)]
-            person_caps = [c for c in caps if b.contains(c)]
-
-            has_helmet = len(person_helmets) > 0
-            has_head = len(person_heads) > 0
-            has_cap = len(person_caps) > 0
-
-            for h in person_helmets:
-                matched_helmets.add(id(h))
-            for hd in person_heads:
-                matched_heads.add(id(hd))
-
-            if has_helmet:
-                status = "helmet"
-            elif has_head or has_cap:
-                status = "no_helmet"
-            else:
-                # If neither head nor helmet detected in box, but other heads/helmets exist in scene
-                status = "no_helmet" if (helmets or heads) else "unknown"
-
-            persons.append(PersonStatus([b.x1, b.y1, b.x2, b.y2], b.confidence, status))
-
-        # 2. Add standalone / distant heads or helmets that were not bounded by a person box
-        unmatched_heads = [hd for hd in heads if id(hd) not in matched_heads]
-        unmatched_helmets = [h for h in helmets if id(h) not in matched_helmets]
-
-        for hd in unmatched_heads:
-            # Check if covered by an unmatched helmet (via IoU overlap or center point)
-            covered = any(
-                h.overlaps(hd, min_iou=0.10)
-                or (h.x1 - 12 <= hd.cx <= h.x2 + 12 and h.y1 - 15 <= hd.cy <= h.y2 + 15)
-                for h in unmatched_helmets
+        # Deduplicate overlapping helmet and no-helmet predictions on the same head:
+        # If a head/no-helmet overlaps with a helmet box, the helmet takes precedence
+        filtered_heads = []
+        for hd in heads:
+            is_covered = any(
+                hd.overlaps(h, min_iou=0.15)
+                or (h.x1 <= hd.cx <= h.x2 and h.y1 <= hd.cy <= h.y2)
+                or (hd.x1 <= h.cx <= hd.x2 and hd.y1 <= h.cy <= hd.y2)
+                for h in helmets
             )
+            if not is_covered:
+                filtered_heads.append(hd)
+
+        persons: List[PersonStatus] = []
+        for h in helmets:
             persons.append(
                 PersonStatus(
-                    [hd.x1, hd.y1, hd.x2, hd.y2],
-                    hd.confidence,
-                    "helmet" if covered else "no_helmet",
+                    bbox=[h.x1, h.y1, h.x2, h.y2],
+                    confidence=h.confidence,
+                    status="helmet",
                 )
             )
 
-        for h in unmatched_helmets:
-            # If not already matched to an unmatched head
-            is_matched = any(
-                h.overlaps(hd, min_iou=0.10)
-                or (h.x1 - 12 <= hd.cx <= h.x2 + 12 and h.y1 - 15 <= hd.cy <= h.y2 + 15)
-                for hd in unmatched_heads
-            )
-            if not is_matched:
-                persons.append(
-                    PersonStatus(
-                        [h.x1, h.y1, h.x2, h.y2],
-                        h.confidence,
-                        "helmet",
-                    )
+        for hd in filtered_heads:
+            persons.append(
+                PersonStatus(
+                    bbox=[hd.x1, hd.y1, hd.x2, hd.y2],
+                    confidence=hd.confidence,
+                    status="no_helmet",
                 )
+            )
 
-        return FrameResult(persons=persons, raw_boxes=raw, inference_time_ms=elapsed_ms)
+        return FrameResult(persons=persons, raw_boxes=valid_raw, inference_time_ms=elapsed_ms)
 
     def get_model_info(self) -> dict:
         info = self._detector.get_model_info()
+        all_classes = info.get("classes", [])
+        info["configured_classes"] = ["helmet", "no-helmet"]
+        info["active_mode"] = "2-class (helmet & no-helmet only)"
+        info["ignored_classes"] = [
+            c for c in all_classes 
+            if c.lower() not in HELMET_CLASSES and c.lower() not in HEAD_CLASSES and c.lower() not in CAP_CLASSES
+        ]
         info["status_logic"] = {
             "helmet_classes": sorted(HELMET_CLASSES),
-            "head_classes": sorted(HEAD_CLASSES),
-            "person_classes": sorted(PERSON_CLASSES),
+            "no_helmet_classes": sorted(HEAD_CLASSES),
         }
         return info
 
