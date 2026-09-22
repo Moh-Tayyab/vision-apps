@@ -6,6 +6,7 @@ Duplicated intentionally per app so each app stays fully independent
 
 from __future__ import annotations
 
+import os
 import time
 import threading
 from typing import Generator, Optional
@@ -107,9 +108,16 @@ class MobileCameraStream:
 
     def _capture_loop(self) -> None:
         delay = 1.0 / max(1, self.fps)
+        # Downscale right after read: dramatically cuts JPEG decode/resize/encode
+        # and inference cost when sources stream large frames (e.g. phone 1440x1440).
+        max_capture_width = int(os.getenv("CAPTURE_MAX_WIDTH", "960"))
         while self._running and self._video is not None:
             frame = self._video.read()
             if frame is not None:
+                h, w = frame.shape[:2]
+                if w > max_capture_width:
+                    scale = max_capture_width / w
+                    frame = cv2.resize(frame, (max_capture_width, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
                 if self._transform:
                     frame = apply_transform(frame, self._transform)
                 self._buffer.update(frame)
@@ -148,16 +156,26 @@ class MobileCameraStream:
 
 
 class _VideoSource:
-    """OpenCV video source with auto-reconnect (mirrors carton_counter.Streamer.VideoSource)."""
+    """Video source with auto-reconnect.
+
+    HTTP(S) URLs use a dedicated MJPEG reader thread that never blocks the caller:
+    network hiccups are absorbed, and the feed automatically reconnects (fixed the
+    cv2 read() stall that froze stream stop() and left the stream permanently wedged).
+    Local devices (0/1/2, /dev/video*) fall back to OpenCV capture.
+    """
 
     def __init__(self, source: str | int = 0, width: int = 1280, height: int = 720):
         self.source = source
         self.width = width
         self.height = height
         self._cap: Optional[cv2.VideoCapture] = None
+        self._http = _MjpegSource(self.source)
         self._lock = threading.Lock()
+        self._is_http = isinstance(source, str) and source.startswith(("http://", "https://"))
 
     def open(self) -> bool:
+        if self._is_http:
+            return self._http.open()
         with self._lock:
             if self._cap is not None and self._cap.isOpened():
                 return True
@@ -172,6 +190,8 @@ class _VideoSource:
                 return False
 
     def read(self) -> Optional[np.ndarray]:
+        if self._is_http:
+            return self._http.read()
         with self._lock:
             if self._cap is None or not self._cap.isOpened():
                 if not self.open():
@@ -187,10 +207,157 @@ class _VideoSource:
             return frame
 
     def release(self) -> None:
+        self._http.close()
         with self._lock:
             if self._cap is not None:
                 self._cap.release()
                 self._cap = None
+
+
+class _MjpegSource:
+    """Minimal HTTP MJPEG reader that decodes JPEG boundaries over an HTTP stream.
+
+    A background thread owns the TCP socket and does the blocking reads; callers just
+    grab the latest cached frame, so a dead/stalled phone feed can neither wedge read()
+    nor stop(). Reconnects automatically with a short backoff.
+    """
+
+    _SOI = b"\xff\xd8"
+    _EOI = b"\xff\xd9"
+
+    def __init__(self, url: str, reconnect_delay: float = 1.0):
+        self.url = url
+        self._reconnect_delay = reconnect_delay
+        self._latest: Optional[np.ndarray] = None
+        self._latest_ts: float = 0.0
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def open(self) -> bool:
+        if self._running:
+            return True
+        if self._test_open():
+            self._running = True
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+            return True
+        return False
+
+    def read(self) -> Optional[np.ndarray]:
+        result = self.get_latest()
+        return result[1] if result else None
+
+    def close(self) -> None:
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+
+    # -- internal ----------------------------------------------------------
+
+    def _test_open(self) -> bool:
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(self.url, timeout=5) as _:
+                return True
+        except Exception:
+            return False
+
+    def _loop(self) -> None:
+        while self._running:
+            try:
+                self._stream_once()
+            except Exception:
+                pass
+            if not self._running:
+                break
+            time.sleep(self._reconnect_delay)
+
+    def _stream_once(self) -> None:
+        import re
+        import urllib.request
+
+        req = urllib.request.Request(self.url, headers={"Connection": "keep-alive"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            bm = re.search(r"boundary[ \t]*=[ \t]*[\"']?([^;\"'\r\n]+)", ctype)
+            buf = b""
+            if bm:
+                boundary = b"--" + bm.group(1).encode()
+            else:
+                boundary = b""
+            while self._running:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                if not boundary:
+                    self._frag_scan(buf)
+                    buf = buf[-4096:]
+                    continue
+                if boundary not in buf:
+                    if len(buf) > max(65536, len(boundary) * 4):
+                        buf = buf[-len(boundary):]
+                    continue
+                # each boundary terminates a frame payload: "--boundary\r\n<hdrs>\r\n<bytes>\r\n--boundary"
+                idx = 0
+                while True:
+                    s = buf.find(boundary, idx)
+                    if s == -1:
+                        break
+                    body = buf[idx:s]
+                    if body:
+                        data = self._extract_jpeg(body)
+                        if data is not None:
+                            frame = self._decode(data)
+                            if frame is not None:
+                                with self._lock:
+                                    self._latest = frame
+                                    self._latest_ts = time.time()
+                    idx = s + len(boundary)
+                buf = buf[idx:]
+
+    def _extract_jpeg(self, body: bytes) -> Optional[bytes]:
+        hdr = body.find(b"\r\n\r\n")
+        if hdr != -1:
+            body = body[hdr + 4:]
+        s = body.find(self._SOI)
+        e = body.rfind(self._EOI)
+        if s != -1 and e > s:
+            return body[s : e + 2]
+        return body if s != -1 else None
+
+    def _frag_scan(self, buf: bytes) -> None:
+        """Fallback SOI/EOI scanner for feeds without a multipart boundary."""
+        idx = 0
+        gathering = False
+        for p in range(len(buf) - 1):
+            if not gathering and buf[p : p + 2] == self._SOI:
+                gathering = True
+                idx = p
+            elif gathering and buf[p : p + 2] == self._EOI:
+                frame = self._decode(buf[idx : p + 2])
+                if frame is not None:
+                    with self._lock:
+                        self._latest = frame
+                        self._latest_ts = time.time()
+                gathering = False
+
+    def _decode(self, jpeg: bytes) -> Optional[np.ndarray]:
+        try:
+            arr = np.frombuffer(jpeg, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            return frame
+        except Exception:
+            return None
+
+    def get_latest(self) -> Optional[tuple]:
+        with self._lock:
+            if self._latest is None:
+                return None
+            return (self._latest_ts, self._latest.copy())
 
 
 def _generate_standby_frame(w: int = 640, h: int = 480) -> np.ndarray:
@@ -224,12 +391,40 @@ def _generate_standby_frame(w: int = 640, h: int = 480) -> np.ndarray:
     return img
 
 
+_ENCODE_CACHE_LOCK = threading.Lock()
+_ENCODE_CACHE: dict = {}
+
+
+def _encoded_jpeg(ts: float, frame, quality: int) -> bytes:
+    """Encode once per unique frame timestamp; all clients share the same JPEG bytes.
+
+    Prevents N connected browsers from each re-encoding the same frame (the main
+    cause of sluggish MJPEG streams with multiple viewers).
+    """
+    with _ENCODE_CACHE_LOCK:
+        if _ENCODE_CACHE.get("ts") == ts:
+            return _ENCODE_CACHE["jpeg"]
+    ok, out = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        return b""
+    with _ENCODE_CACHE_LOCK:
+        _ENCODE_CACHE["ts"] = ts
+        _ENCODE_CACHE["jpeg"] = out.tobytes()
+    return _ENCODE_CACHE["jpeg"]
+
+
 def mjpeg_from_buffer(
     buffer: FrameBuffer,
     quality: int = 65,
     transform=None,
+    max_width: int = 854,
 ) -> Generator[bytes, None, None]:
-    """MJPEG multipart stream from a FrameBuffer; optimized for real-time 30-60 FPS low-latency playback."""
+    """MJPEG multipart stream from a FrameBuffer; optimized for real-time low-latency playback.
+
+    Encodes each unique frame once (shared across all viewers) and downscales to
+    ``max_width`` before JPEG encoding to drastically reduce CPU load.
+    """
+    last_ts_seen = -1.0
     while True:
         result = buffer.get_latest()
         is_fresh = False
@@ -240,21 +435,33 @@ def mjpeg_from_buffer(
 
         if not is_fresh:
             frame = _generate_standby_frame()
+            last_ts_seen = -1.0
             time.sleep(0.08)
         else:
+            # Skip identical frames: only encode when a new frame has arrived.
+            if ts == last_ts_seen:
+                time.sleep(0.004)
+                continue
+            last_ts_seen = ts
             if transform is not None:
                 frame = transform(frame)
                 if frame is None:
                     time.sleep(0.01)
                     continue
-            time.sleep(0.015)  # ~60 FPS smooth rendering
+            # Downscale large frames before encoding (biggest CPU saver).
+            h, w = frame.shape[:2]
+            if w > max_width:
+                scale = max_width / w
+                frame = cv2.resize(frame, (max_width, int(h * scale)), interpolation=cv2.INTER_AREA)
 
-        ok, out = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality, cv2.IMWRITE_JPEG_OPTIMIZE, 0])
-        if not ok:
+        # Shared encode: first client encodes, rest reuse the same JPEG bytes.
+        payload = _encoded_jpeg(last_ts_seen, frame, quality)
+        if not payload:
+            time.sleep(0.01)
             continue
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n"
-            + out.tobytes()
+            + payload
             + b"\r\n"
         )

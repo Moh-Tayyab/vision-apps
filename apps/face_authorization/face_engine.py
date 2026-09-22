@@ -21,8 +21,8 @@ from db import DatabaseManager
 logger = logging.getLogger("face_auth.engine")
 
 MODEL_NAME = "Facenet"
-DETECTOR_BACKEND = os.getenv("DETECTOR_BACKEND", "retinaface")
-COSINE_THRESHOLD = float(os.getenv("COSINE_THRESHOLD", "0.48"))
+DETECTOR_BACKEND = os.getenv("DETECTOR_BACKEND", "yunet")
+COSINE_THRESHOLD = float(os.getenv("COSINE_THRESHOLD", "0.12"))
 
 
 class FaceEngine:
@@ -61,7 +61,7 @@ class FaceEngine:
         return self._model_loaded
 
     def enroll(self, name: str, images: List[np.ndarray]) -> dict:
-        """Extract embeddings from images and persist to SQLite + Qdrant."""
+        """Extract L2-normalized embeddings from images and persist to SQLite + Qdrant."""
         try:
             from deepface import DeepFace
         except ImportError as e:
@@ -77,11 +77,17 @@ class FaceEngine:
                 img_path=img,
                 model_name=MODEL_NAME,
                 detector_backend=DETECTOR_BACKEND,
+                align=True,
                 enforce_detection=False,
             )
             if not reps:
                 continue
-            new_embeddings.extend(r["embedding"] for r in reps)
+            for r in reps:
+                emb = np.asarray(r["embedding"], dtype=np.float32)
+                norm = np.linalg.norm(emb)
+                if norm > 1e-8:
+                    emb = emb / norm
+                new_embeddings.append(emb.tolist())
 
         if not new_embeddings:
             raise ValueError(f"No face detected in any of the {len(images)} enrollment image(s)")
@@ -127,12 +133,16 @@ class FaceEngine:
         else:
             inp = face_bgr.astype(np.uint8)
 
-        rep = DeepFace.represent(
-            img_path=inp,
-            model_name=MODEL_NAME,
-            detector_backend="skip",
-            enforce_detection=False,
-        )
+        try:
+            rep = DeepFace.represent(
+                img_path=inp,
+                model_name=MODEL_NAME,
+                detector_backend="skip",
+                enforce_detection=False,
+            )
+        except Exception:
+            return None
+
         if not rep or not rep[0].get("embedding"):
             return None
         vec = np.asarray(rep[0]["embedding"], dtype=np.float32)
@@ -147,4 +157,15 @@ class FaceEngine:
         query = self.extract_embedding(face_bgr)
         if query is None:
             return None
-        return self.db.search_face(query, threshold=eff_threshold)
+
+        # Hard reject ceiling: below this, embeddings are too degraded (tiny/
+        # distant faces) to trust the nearest neighbor. Prevents wrongly
+        # NAMING the closest enrolled person when the match is unreliable.
+        reject_ceiling = float(os.getenv("REJECT_CEILING", "0.35"))
+        match = self.db.search_face(query, threshold=eff_threshold)
+        if match is None:
+            return None
+        if match.get("distance", 0.0) >= reject_ceiling:
+            return None
+        return match
+

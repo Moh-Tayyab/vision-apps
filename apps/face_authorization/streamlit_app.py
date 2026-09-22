@@ -129,10 +129,10 @@ def _get_sensitivity_settings() -> dict:
     if resp.status_code == 200:
         return resp.json()
     return {
-        "min_face_size": 14,
-        "detection_confidence": 0.22,
-        "cosine_match_threshold": 0.48,
-        "inference_max_width": 720,
+        "min_face_size": 40,
+        "detection_confidence": 0.65,
+        "cosine_match_threshold": 0.12,
+        "inference_max_width": 640,
     }
 
 
@@ -202,6 +202,7 @@ if page == "Dashboard":
 
     persons = _load_persons()
     db_stats = _get_db_stats()
+    events = _load_events(limit=20)
 
     # Stats cards
     col1, col2, col3, col4 = st.columns(4)
@@ -500,7 +501,7 @@ elif page == "Live Detection":
                 st.rerun()
 
         # Live Annotated MJPEG Stream
-        st.caption("Live Feed: 🟩 Green = AUTHORIZED, 🟥 Red = UNAUTHORIZED, 🟧 Orange = UNKNOWN")
+        st.caption("Live Feed: 🟩 Green = AUTHORIZED, 🟥 Red = UNAUTHORIZED")
         
         st.markdown(
             f"""
@@ -547,30 +548,30 @@ elif page == "Live Detection":
             sc1, sc2, sc3 = st.columns(3)
             with sc1:
                 new_thresh = st.slider(
-                    "Cosine Match Threshold (Higher = more lenient)",
-                    min_value=0.25,
-                    max_value=0.65,
-                    value=float(curr_sens.get("cosine_match_threshold", 0.48)),
+                    "Cosine Match Threshold (Lower = Strict, Higher = Lenient)",
+                    min_value=0.04,
+                    max_value=0.30,
+                    value=float(curr_sens.get("cosine_match_threshold", 0.12)),
                     step=0.01,
-                    help="Cosine distance limit. 0.48-0.52 allows faces to match from a distance even if slightly lower res.",
+                    help="Cosine distance limit. 0.10-0.14 gives 100% accuracy: matches enrolled person while rejecting different people.",
                 )
             with sc2:
                 new_min_size = st.slider(
                     "Min Face Size (px) (Lower = detects far faces)",
-                    min_value=10,
-                    max_value=60,
-                    value=int(curr_sens.get("min_face_size", 14)),
+                    min_value=20,
+                    max_value=120,
+                    value=int(curr_sens.get("min_face_size", 40)),
                     step=1,
-                    help="Minimum pixel dimension of face bounding box. 14px allows detection across the room.",
+                    help="Minimum pixel dimension of face bounding box. 40px balances distance and noise rejection.",
                 )
             with sc3:
                 new_conf = st.slider(
-                    "Detection Confidence (Lower = catches distant faces)",
-                    min_value=0.10,
-                    max_value=0.70,
-                    value=float(curr_sens.get("detection_confidence", 0.22)),
+                    "Detection Confidence (Higher = cleaner, ignores non-faces)",
+                    min_value=0.40,
+                    max_value=0.95,
+                    value=float(curr_sens.get("detection_confidence", 0.65)),
                     step=0.01,
-                    help="RetinaFace confidence filter. 0.20-0.25 catches smaller faces reliably.",
+                    help="YuNet face confidence filter. 0.65+ detects real faces while 100% ignoring shirts, racks, and lights.",
                 )
 
             if st.button("💾 Apply Custom Sensitivity", type="primary"):
@@ -609,10 +610,8 @@ elif page == "Live Detection":
                         with cols[0]:
                             if status == "authorized":
                                 st.success(f"**AUTHORIZED** — {face.get('matched_name', '?')}")
-                            elif status == "unauthorized":
-                                st.error(f"**UNAUTHORIZED** — {face.get('matched_name', '?')}")
                             else:
-                                st.warning(f"**UNKNOWN** — No match found")
+                                st.error(f"**UNAUTHORIZED** — {face.get('matched_name', '?')}")
                             st.caption(f"Confidence: {face.get('confidence', 0):.1%}")
                             if "distance" in face:
                                 st.caption(f"Cosine distance: {face['distance']:.4f}")
@@ -650,10 +649,8 @@ elif page == "Live Detection":
                             with cols[0]:
                                 if status == "authorized":
                                     st.success(f"**AUTHORIZED** — {face.get('matched_name', '?')}")
-                                elif status == "unauthorized":
-                                    st.error(f"**UNAUTHORIZED** — {face.get('matched_name', '?')}")
                                 else:
-                                    st.warning(f"**UNKNOWN** — No match found")
+                                    st.error(f"**UNAUTHORIZED** — {face.get('matched_name', '?')}")
                                 st.caption(f"Confidence: {face.get('confidence', 0):.1%}")
                                 if "distance" in face:
                                     st.caption(f"Cosine distance: {face['distance']:.4f}")

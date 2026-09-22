@@ -23,7 +23,7 @@ import numpy as np
 
 logger = logging.getLogger("face_auth.db")
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://face_auth_qdrant:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "face_embeddings")
 VECTOR_DIM = int(os.getenv("VECTOR_DIM", "128"))  # Facenet is 128, Facenet512 is 512
@@ -320,7 +320,7 @@ class DatabaseManager:
 
     # ---------------- Vector Search ----------------
 
-    def search_face(self, query_vector: np.ndarray, threshold: float = 0.48) -> Optional[dict]:
+    def search_face(self, query_vector: np.ndarray, threshold: float = 0.12) -> Optional[dict]:
         """Match query face embedding against stored vectors.
 
         Uses Qdrant if available; otherwise performs vectorized NumPy cosine matching.
@@ -332,14 +332,15 @@ class DatabaseManager:
         # Try Qdrant search
         if self._qdrant_available and self._qdrant_client is not None:
             try:
-                hits = self._qdrant_client.search(
+                hits = self._qdrant_client.query_points(
                     collection_name=QDRANT_COLLECTION,
-                    query_vector=query_vec.tolist(),
+                    query=query_vec.tolist(),
                     limit=1,
                     score_threshold=1.0 - threshold,  # Cosine similarity score is (1 - cosine_dist)
                 )
-                if hits:
-                    best_hit = hits[0]
+                points = hits.points if hasattr(hits, "points") else hits
+                if points:
+                    best_hit = points[0]
                     cosine_dist = round(1.0 - float(best_hit.score), 4)
                     return {
                         "name": best_hit.payload.get("name", "Unknown"),
@@ -349,13 +350,14 @@ class DatabaseManager:
                     }
                 else:
                     # Still find closest for display/audit
-                    all_hits = self._qdrant_client.search(
+                    all_hits = self._qdrant_client.query_points(
                         collection_name=QDRANT_COLLECTION,
-                        query_vector=query_vec.tolist(),
+                        query=query_vec.tolist(),
                         limit=1,
                     )
-                    if all_hits:
-                        best = all_hits[0]
+                    points2 = all_hits.points if hasattr(all_hits, "points") else all_hits
+                    if points2:
+                        best = points2[0]
                         dist = round(1.0 - float(best.score), 4)
                         return {
                             "name": best.payload.get("name", "Unknown"),

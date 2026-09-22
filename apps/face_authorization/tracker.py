@@ -96,7 +96,7 @@ class TrackedPerson:
 class FaceTracker:
     """Multi-target spatial IoU tracker with temporal classification consensus."""
 
-    def __init__(self, iou_threshold: float = 0.30, max_missed_frames: int = 10):
+    def __init__(self, iou_threshold: float = 0.30, max_missed_frames: int = 2):
         self.iou_threshold = iou_threshold
         self.max_missed_frames = max_missed_frames
         self._next_track_id = 1
@@ -142,14 +142,23 @@ class FaceTracker:
                     matched_detections.add(d_idx)
                     matched_tracks.add(best_tid)
 
-        # Create new tracks for unmatched detections
+        # Create new tracks for unmatched detections (only if they don't overlap with an existing track)
         for d_idx, det in enumerate(detected_faces):
             if d_idx not in matched_detections:
+                d_box = det.get("bbox", [0, 0, 0, 0])
+                # Suppress if this detection overlaps with ANY existing track
+                overlaps_existing = any(
+                    _compute_iou(d_box, trk.bbox) >= self.iou_threshold
+                    for trk in self._tracks.values()
+                )
+                if overlaps_existing:
+                    continue
+
                 tid = self._next_track_id
                 self._next_track_id += 1
                 trk = TrackedPerson(
                     track_id=tid,
-                    bbox=list(det.get("bbox", [0, 0, 0, 0])),
+                    bbox=list(d_box),
                     status=det.get("status", "unknown"),
                     matched_name=det.get("matched_name"),
                     confidence=det.get("confidence", 0.0),
@@ -164,14 +173,37 @@ class FaceTracker:
                 self._tracks[tid] = trk
 
         # Purge stale tracks
-        to_remove = []
+        to_remove = set()
         for tid, trk in self._tracks.items():
             if tid not in matched_tracks and tid not in [self._next_track_id - 1]:
                 trk.missed_frames += 1
                 if trk.missed_frames > self.max_missed_frames:
-                    to_remove.append(tid)
+                    to_remove.add(tid)
 
         for tid in to_remove:
             del self._tracks[tid]
 
-        return [trk.to_dict() for trk in self._tracks.values()]
+        # Inter-track deduplication: If any 2 active tracks overlap, keep the stronger one
+        active_list = sorted(
+            self._tracks.values(),
+            key=lambda t: (t.confidence, -t.missed_frames, len(t.history)),
+            reverse=True,
+        )
+        kept_tids = set()
+        final_tracks = []
+        for trk in active_list:
+            conflict = False
+            for kept in final_tracks:
+                if _compute_iou(trk.bbox, kept.bbox) >= 0.30:
+                    conflict = True
+                    break
+            if not conflict:
+                final_tracks.append(trk)
+                kept_tids.add(trk.track_id)
+
+        # Remove superseded duplicate tracks from memory
+        for tid in list(self._tracks.keys()):
+            if tid not in kept_tids and tid not in to_remove:
+                del self._tracks[tid]
+
+        return [trk.to_dict() for trk in final_tracks if trk.missed_frames <= 1]

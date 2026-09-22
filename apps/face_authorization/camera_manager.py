@@ -300,8 +300,14 @@ class CameraSource:
                         cap = cv2.VideoCapture(str(idx))
 
                 if cap.isOpened():
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    # 960x540@~20FPS is the accuracy/smoothness sweet spot for the
+                    # on-board webcam: faces stay large enough for reliable face
+                    # matching (oversized crops at 640x480 cross-match at distance),
+                    # yet the stream stays fluid. Override with USB_WIDTH / USB_HEIGHT.
+                    width = int(os.getenv("USB_WIDTH", "960"))
+                    height = int(os.getenv("USB_HEIGHT", "540"))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     cap.set(cv2.CAP_PROP_FPS, self.target_fps)
                     return cap

@@ -18,6 +18,14 @@ import time
 from collections import deque
 from typing import List, Optional
 
+# Limit TensorFlow CPU thread usage BEFORE importing deepface/tensorflow so the
+# camera capture + MJPEG encoder are not starved of cores. Inter-op=1 avoids
+# context-switch storms that collapse the live stream frame rate.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "1")
+
 import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
@@ -29,7 +37,7 @@ from face_engine import COSINE_THRESHOLD, DETECTOR_BACKEND, FaceEngine
 from metrics import metrics
 from security import verify_admin_access
 from streamer import FrameBuffer, MobileCameraStream, apply_transform
-from tracker import FaceTracker
+from tracker import FaceTracker, _compute_iou
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("face_auth.main")
@@ -53,12 +61,13 @@ _events_log: deque = deque(maxlen=300)
 
 # Orientation correction applied at capture time so display + inference agree.
 _CAMERA_TRANSFORM: str = os.getenv("CAMERA_TRANSFORM", "none")
+_CAMERA_TRANSFORM_FILE: str = os.getenv("CAMERA_TRANSFORM_FILE", "./data/camera_transform.txt")
 
 # Sensitivity & Detection Parameters
-MIN_FACE_SIZE: int = int(os.getenv("MIN_FACE_SIZE", "14"))
-DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.22"))
-COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.48"))
-INFERENCE_MAX_WIDTH: int = int(os.getenv("INFERENCE_MAX_WIDTH", "960"))
+MIN_FACE_SIZE: int = int(os.getenv("MIN_FACE_SIZE", "40"))
+DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.65"))
+COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.12"))
+INFERENCE_MAX_WIDTH: int = int(os.getenv("INFERENCE_MAX_WIDTH", "640"))
 
 # Detection Cache & Async Inference
 _detection_lock = threading.Lock()
@@ -87,6 +96,12 @@ def _get_tracker() -> FaceTracker:
     if _tracker is None:
         _tracker = FaceTracker()
     return _tracker
+
+
+def _reset_tracker() -> None:
+    """Clear all tracked persons so identities never carry over between camera sessions."""
+    global _tracker
+    _tracker = FaceTracker()
 
 
 def _get_camera_manager() -> CameraManager:
@@ -138,6 +153,7 @@ def _verify_frame(
     confidence_thresh: Optional[float] = None,
     cosine_thresh: Optional[float] = None,
     check_liveness: bool = True,
+    use_tracker: bool = True,
 ) -> dict:
     """Pipeline: Detection -> Passive Liveness -> Vector Search -> Temporal Tracking -> DB Audit."""
     start_t = time.time()
@@ -174,30 +190,100 @@ def _verify_frame(
     except Exception:
         faces = []
 
-    raw_detections = []
-    now = time.time()
-    anti_spoof = _get_anti_spoof()
-    engine = _get_engine()
-
-    for i, face in enumerate(faces):
+    # Step A: Filter raw face proposals by confidence, size, geometry, and facial landmarks
+    candidates = []
+    for face in faces:
         facial_area = face.get("facial_area", {})
+        confidence = float(face.get("confidence", 0.0))
+        if confidence < min_conf:
+            continue
+
+        # Strict Facial Landmark Validation:
+        # A legitimate human face MUST have left and right eyes detected with realistic separation.
+        # This completely rejects shoe racks, striped textures, shirt folds, buttons, and wall reflections!
+        left_eye = facial_area.get("left_eye")
+        right_eye = facial_area.get("right_eye")
+        if not left_eye or not right_eye:
+            continue
+
+        eye_dx = abs(left_eye[0] - right_eye[0])
+        eye_dy = abs(left_eye[1] - right_eye[1])
+        # Eye distance must be at least 10px and mostly horizontal (not vertically aligned)
+        if eye_dx < 10 or eye_dy > eye_dx * 1.5:
+            continue
+
         x = int(facial_area.get("x", 0) * scale_x)
         y = int(facial_area.get("y", 0) * scale_y)
         fw = int(facial_area.get("w", 0) * scale_x)
         fh = int(facial_area.get("h", 0) * scale_y)
-        confidence = float(face.get("confidence", 0.0))
-        if fw < min_size or fh < min_size or confidence < min_conf:
+
+        if fw < min_size or fh < min_size:
             continue
 
-        # Extract high-resolution face crop from original un-downscaled image
-        # with a 12% safety margin to ensure full facial features even for distant faces
+        # Human face aspect ratio validation (reject bizarre vertical/horizontal light stripes)
+        aspect = fw / float(max(1, fh))
+        if aspect < 0.55 or aspect > 1.70:
+            continue
+
         x1 = max(0, x)
         y1 = max(0, y)
         x2 = min(w, x + fw)
         y2 = min(h, y + fh)
 
-        pad_x = int(fw * 0.12)
-        pad_y = int(fh * 0.12)
+        candidates.append({
+            "bbox": [x1, y1, x2, y2],
+            "confidence": confidence,
+            "face": face,
+            "fw": fw,
+            "fh": fh,
+        })
+
+    # Step B: Non-Maximum Suppression (NMS) to eliminate duplicate proposals on the same face
+    candidates = sorted(candidates, key=lambda c: c["confidence"], reverse=True)
+    kept_candidates = []
+    for c in candidates:
+        overlap = False
+        for k in kept_candidates:
+            if _compute_iou(c["bbox"], k["bbox"]) >= 0.35:
+                overlap = True
+                break
+        if not overlap:
+            kept_candidates.append(c)
+
+    raw_detections = []
+    now = time.time()
+    anti_spoof = _get_anti_spoof()
+    engine = _get_engine()
+
+    # Below this detected face width embeddings are unreliable and can false-match
+    # the WRONG enrolled person. Such faces are reported as "too far" instead of
+    # ever guessing an identity. Calibrated against Facenet: bakar@52px -> tayyab.
+    FAR_FACE_WIDTH = int(os.getenv("FAR_FACE_WIDTH", "55"))
+
+    for cand in kept_candidates:
+        x1, y1, x2, y2 = cand["bbox"]
+        fw, fh = cand["fw"], cand["fh"]
+        confidence = cand["confidence"]
+        face = cand["face"]
+
+        # Face too small => unreliable embedding / wrong-name risk. Never identify.
+        if fw < FAR_FACE_WIDTH:
+            raw_detections.append({
+                "bbox": [x1, y1, x2, y2],
+                "confidence": round(confidence, 3),
+                "liveness_score": 1.0,
+                "is_live": True,
+                "status": "far",
+                "matched_name": None,
+                "reason": "face too small - step closer",
+                "distance": None,
+            })
+            continue
+
+        # Extract high-resolution face crop from original un-downscaled image
+        # with a 10% safety margin for features
+        pad_x = int(fw * 0.10)
+        pad_y = int(fh * 0.10)
         crop_x1 = max(0, x1 - pad_x)
         crop_y1 = max(0, y1 - pad_y)
         crop_x2 = min(w, x2 + pad_x)
@@ -213,7 +299,14 @@ def _verify_frame(
             else:
                 face_crop = raw_crop.astype(np.uint8)
 
+        # Glare / over-exposure rejection: skip pure white light patches
+        if face_crop.size > 0:
+            gray_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY) if face_crop.ndim == 3 else face_crop
+            if np.mean(gray_crop > 250) > 0.80 or np.mean(gray_crop) > 244:
+                continue
+
         # Step 1: Passive Liveness & Anti-Spoofing Check
+        # Only run anti-spoof on legitimate face candidates (confidence >= 0.50)
         liveness_res = anti_spoof.check_liveness(face_crop) if check_liveness else None
         is_live = liveness_res.is_real if liveness_res else True
         liveness_score = liveness_res.liveness_score if liveness_res else 1.0
@@ -237,7 +330,9 @@ def _verify_frame(
             # Step 2: Vector Search via Database / Qdrant
             match = engine.identify_face(face_crop, threshold=eff_cosine)
             if match is None:
-                entry.update(status="unknown", reason="no enrolled persons")
+                # No enrolled persons, OR the face crop is too small/degraded to
+                # trust an identity (reject ceiling) — never guess a name here.
+                entry.update(status="unknown", reason="no match / face too small")
             else:
                 entry["matched_name"] = match["name"]
                 entry["distance"] = match["distance"]
@@ -247,7 +342,16 @@ def _verify_frame(
         raw_detections.append(entry)
 
     # Step 3: Multi-target Temporal Tracking & Spatial Smoothing
-    tracked_results = _get_tracker().update(raw_detections, now=now)
+    if use_tracker:
+        tracked_results = _get_tracker().update(raw_detections, now=now)
+    else:
+        # Stateless single-image verification: assign fresh track_ids (1-based) so
+        # identity is NEVER carried over from a previous request / camera session.
+        tracked_results = []
+        for idx, det in enumerate(raw_detections):
+            det["track_id"] = idx + 1
+            det["age_seconds"] = 0.0
+            tracked_results.append(det)
 
     # Step 4: Persistent Audit Logging
     for entry in tracked_results:
@@ -286,6 +390,11 @@ def _async_inference_worker():
     """Background worker that continuously runs AI inference on latest camera frame."""
     global _latest_detections
 
+    # Inference is expensive (~100-450ms/frame). Throttle to a target rate so the
+    # camera capture loop and MJPEG encoder keep a smooth, higher-FPS stream while
+    # detections stay fresh enough for live display + audit.
+    min_interval = float(os.getenv("INFERENCE_MIN_INTERVAL", "0.20"))  # ~5 updates/sec
+
     while _inference_running:
         latest = _get_active_buffer().get_latest()
         if latest is None:
@@ -298,7 +407,15 @@ def _async_inference_worker():
             time.sleep(0.05)
             continue
 
+        # Cooldown between inference passes
+        last_infer_time = getattr(_async_inference_worker, "_last_infer", 0.0)
+        elapsed = time.time() - last_infer_time
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+            continue
+
         try:
+            _async_inference_worker._last_infer = time.time()
             res = _verify_frame(frame, log_events=True)
             with _detection_lock:
                 _latest_detections = res.get("faces", [])
@@ -352,10 +469,36 @@ def _start_https_server():
             print(f"HTTPS server error: {e}")
 
 
+def _persist_camera_transform(t: str) -> None:
+    try:
+        p = _CAMERA_TRANSFORM_FILE
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            f.write(t)
+    except Exception as e:
+        print(f"[persist] failed to write transform: {e}")
+
+
+def _load_camera_transform() -> str:
+    try:
+        if os.path.exists(_CAMERA_TRANSFORM_FILE):
+            with open(_CAMERA_TRANSFORM_FILE) as f:
+                v = f.read().strip().lower()
+                return v if v else "none"
+    except Exception:
+        pass
+    return "none"
+
+
 @app.on_event("startup")
 async def startup():
-    global _inference_thread
+    global _inference_thread, _CAMERA_TRANSFORM
     try:
+        _persisted = _load_camera_transform()
+        if _persisted != _CAMERA_TRANSFORM:
+            _CAMERA_TRANSFORM = _persisted
+        from camera_manager import set_orientation_transform
+        set_orientation_transform(_CAMERA_TRANSFORM)
         _get_engine()
         _get_camera_manager()
         _inference_thread = threading.Thread(
@@ -449,7 +592,7 @@ async def get_sensitivity_settings():
 async def update_sensitivity_settings(
     min_face_size: Optional[int] = Form(None, ge=8, le=120),
     detection_confidence: Optional[float] = Form(None, ge=0.05, le=0.95),
-    cosine_match_threshold: Optional[float] = Form(None, ge=0.20, le=0.80),
+    cosine_match_threshold: Optional[float] = Form(None, ge=0.02, le=0.50),
     inference_max_width: Optional[int] = Form(None, ge=320, le=1920),
     preset: Optional[str] = Form(None, description="long_distance | balanced | strict"),
 ):
@@ -459,20 +602,20 @@ async def update_sensitivity_settings(
     if preset:
         p = preset.lower().strip()
         if p in ("long_distance", "far", "high_sensitivity"):
-            MIN_FACE_SIZE = 12
-            DETECTION_CONFIDENCE = 0.18
-            COSINE_MATCH_THRESHOLD = 0.50
-            INFERENCE_MAX_WIDTH = 1080
+            MIN_FACE_SIZE = 32
+            DETECTION_CONFIDENCE = 0.55
+            COSINE_MATCH_THRESHOLD = 0.15
+            INFERENCE_MAX_WIDTH = 640
         elif p in ("balanced", "medium", "standard"):
-            MIN_FACE_SIZE = 14
-            DETECTION_CONFIDENCE = 0.22
-            COSINE_MATCH_THRESHOLD = 0.48
-            INFERENCE_MAX_WIDTH = 960
+            MIN_FACE_SIZE = 40
+            DETECTION_CONFIDENCE = 0.65
+            COSINE_MATCH_THRESHOLD = 0.12
+            INFERENCE_MAX_WIDTH = 640
         elif p in ("strict", "close", "high_security"):
-            MIN_FACE_SIZE = 28
-            DETECTION_CONFIDENCE = 0.40
-            COSINE_MATCH_THRESHOLD = 0.40
-            INFERENCE_MAX_WIDTH = 720
+            MIN_FACE_SIZE = 48
+            DETECTION_CONFIDENCE = 0.75
+            COSINE_MATCH_THRESHOLD = 0.09
+            INFERENCE_MAX_WIDTH = 640
         else:
             raise HTTPException(status_code=422, detail=f"Unknown preset '{preset}'. Choose: long_distance | balanced | strict")
 
@@ -644,6 +787,7 @@ async def configure_camera(
             status_code=422,
             detail=f"Invalid source_type '{source_type}'. Must be one of: {valid_types}",
         )
+    _reset_tracker()
     health_info = _get_camera_manager().configure_camera(
         source_type=source_type,
         source_uri=source_uri,
@@ -658,7 +802,13 @@ async def ingest_frame(file: UploadFile = File(...)):
     image = _read_image(await file.read())
     # Apply orientation correction once so display + inference agree.
     image = frame_transform(image)
+    # Detect a NEW mobile session (camera was idle/disconnected) and clear any
+    # stale tracked identities from the previous session.
+    prev_health = _get_camera_manager().get_health()
+    was_idle = prev_health.status in ("standby", "disconnected") or not prev_health.is_connected
     health_info = _get_camera_manager().ingest_frame(image)
+    if was_idle:
+        _reset_tracker()
     return {"status": "accepted", "camera": health_info.to_dict()}
 
 
@@ -676,7 +826,7 @@ async def ingest_frame_check():
 async def verify(file: UploadFile = File(...)):
     """Verify one standalone image against enrolled embeddings."""
     image = _read_image(await file.read())
-    return _verify_frame(image, log_events=True)
+    return _verify_frame(image, log_events=True, use_tracker=False)
 
 
 @app.get("/events")
@@ -700,14 +850,15 @@ async def stream():
 
 @app.get("/stream/detect")
 async def stream_detect():
-    """Live annotated MJPEG: green=AUTHORIZED, red=UNAUTHORIZED, gold=SPOOF, orange=UNKNOWN."""
+    """Live annotated MJPEG: green=AUTHORIZED, red=UNAUTHORIZED."""
     from streamer import mjpeg_from_buffer
 
     colors = {
         "authorized": (0, 220, 0),     # Green
         "unauthorized": (0, 0, 255),   # Red
-        "spoof": (0, 215, 255),        # Gold / Yellow
-        "unknown": (0, 165, 255),      # Orange
+        "spoof": (0, 0, 255),          # Red
+        "unknown": (0, 0, 255),        # Red
+        "far": (0, 0, 255),            # Red
     }
 
     def annotate(frame: np.ndarray):
@@ -718,17 +869,13 @@ async def stream_detect():
         for f in faces:
             x1, y1, x2, y2 = f.get("bbox", [0, 0, 0, 0])
             status = f.get("status", "unknown")
-            color = colors.get(status, (255, 255, 255))
+            color = colors.get(status, (0, 0, 255))
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
 
             if status == "authorized":
                 label = f"AUTHORIZED: {f.get('matched_name', '')}"
-            elif status == "unauthorized":
-                label = f"UNAUTHORIZED"
-            elif status == "spoof":
-                label = "⚠️ SPOOF DETECTED"
             else:
-                label = "UNKNOWN"
+                label = f"UNAUTHORIZED"
 
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
             cv2.rectangle(vis, (x1, max(0, y1 - th - 8)), (x1 + tw + 6, y1), color, -1)
@@ -788,12 +935,14 @@ async def stream_start(source: str = None):
         stream_obj.start()
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    _reset_tracker()
     return {"status": "started", "source": str(stream_obj.source)}
 
 
 @app.get("/stream/stop")
 async def stream_stop():
     global _mobile_stream
+    _reset_tracker()
     if _mobile_stream is not None:
         _mobile_stream.stop()
         _mobile_stream = None
@@ -813,6 +962,7 @@ async def usb_start(
     fps: int = Query(default=20),
 ):
     """Start capturing from a wired USB webcam."""
+    _reset_tracker()
     health_info = _get_camera_manager().configure_camera(
         source_type="usb",
         source_uri=str(device_index),
@@ -824,6 +974,7 @@ async def usb_start(
 @app.post("/usb/stop")
 async def usb_stop():
     """Stop USB capture."""
+    _reset_tracker()
     _get_camera_manager().stop()
     return {"status": "stopped"}
 
@@ -834,6 +985,7 @@ async def camera_connect(
     fps: int = Form(15, ge=1, le=60),
 ):
     """Connect directly to an IP Webcam or RTSP stream."""
+    _reset_tracker()
     health_info = _get_camera_manager().configure_camera(
         source_type="http_mjpeg",
         source_uri=source_uri.strip(),
@@ -845,6 +997,7 @@ async def camera_connect(
 @app.post("/camera/disconnect")
 async def camera_disconnect():
     """Disconnect active camera."""
+    _reset_tracker()
     _get_camera_manager().stop()
     return {"status": "disconnected"}
 
@@ -892,6 +1045,7 @@ async def set_camera_transform(transform: str = Form("none")):
     _CAMERA_TRANSFORM = t_clean
     from camera_manager import set_orientation_transform
     set_orientation_transform(_CAMERA_TRANSFORM)
+    _persist_camera_transform(_CAMERA_TRANSFORM)
     if _mobile_stream is not None:
         _mobile_stream._transform = _CAMERA_TRANSFORM
     return {"status": "ok", "transform": _CAMERA_TRANSFORM}
@@ -1198,7 +1352,7 @@ async def mobile_camera_page():
                     document.getElementById('streamStatus').style.color = '#4ade80';
 
                     if (streamInterval) clearInterval(streamInterval);
-                    streamInterval = setInterval(sendFrame, 50);
+                    streamInterval = setInterval(sendFrame, 33);
                 }} catch (err) {{
                     document.getElementById('permBanner').style.display = 'block';
                     document.getElementById('streamStatus').textContent = 'Permission Denied / Camera Error';
@@ -1226,8 +1380,10 @@ async def mobile_camera_page():
             let isSending = false;
             function sendFrame() {{
                 if (!video.videoWidth || isSending || !stream) return;
-                canvas.width = Math.min(video.videoWidth, 1280);
-                canvas.height = Math.min(video.videoHeight, 720);
+                const maxW = 640;
+                const scale = Math.min(1.0, maxW / video.videoWidth);
+                canvas.width = Math.round(video.videoWidth * scale);
+                canvas.height = Math.round(video.videoHeight * scale);
                 let ctx = canvas.getContext('2d');
 
                 // If user camera, draw mirrored on canvas if needed
@@ -1261,7 +1417,7 @@ async def mobile_camera_page():
                             lastFrameTime = now;
                         }})
                         .catch(err => {{ isSending = false; }});
-                }}, 'image/jpeg', 0.70);
+                }}, 'image/jpeg', 0.65);
             }}
 
             function handleNativeSnap(event) {{
@@ -1449,7 +1605,7 @@ async def root():
                     <button class="btn-action" onclick="setSensitivity('strict')" style="background:#334155; padding:6px 12px; font-size:0.85rem;">🔒 Strict</button>
                 </div>
                 <div id="sensitivityStatus" style="font-size:0.82rem; color:#38bdf8;">
-                    Threshold: 0.48 | MinFace: 14px | Conf: 0.22
+                    Threshold: 0.48 | MinFace: 36px | Conf: 0.55
                 </div>
             </div>
 
