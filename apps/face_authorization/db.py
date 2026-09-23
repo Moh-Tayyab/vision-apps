@@ -26,7 +26,7 @@ logger = logging.getLogger("face_auth.db")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://face_auth_qdrant:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "face_embeddings")
-VECTOR_DIM = int(os.getenv("VECTOR_DIM", "128"))  # Facenet is 128, Facenet512 is 512
+VECTOR_DIM = int(os.getenv("VECTOR_DIM", "512"))  # Facenet512 is 512, Facenet is 128
 
 
 def _vector_to_blob(vec: List[float] | np.ndarray) -> bytes:
@@ -122,6 +122,18 @@ class DatabaseManager:
 
             client = QdrantClient(url=self.qdrant_url, api_key=QDRANT_API_KEY, timeout=2.0)
             collections = [c.name for c in client.get_collections().collections]
+
+            if QDRANT_COLLECTION in collections:
+                try:
+                    c_info = client.get_collection(QDRANT_COLLECTION)
+                    curr_size = c_info.config.params.vectors.size
+                    if curr_size != VECTOR_DIM:
+                        logger.info(f"Recreating Qdrant collection {QDRANT_COLLECTION}: dimension changed {curr_size} -> {VECTOR_DIM}")
+                        client.delete_collection(QDRANT_COLLECTION)
+                        collections.remove(QDRANT_COLLECTION)
+                except Exception as ex:
+                    logger.warning(f"Error checking Qdrant collection dimension: {ex}")
+
             if QDRANT_COLLECTION not in collections:
                 client.create_collection(
                     collection_name=QDRANT_COLLECTION,
@@ -132,7 +144,7 @@ class DatabaseManager:
                 )
             self._qdrant_client = client
             self._qdrant_available = True
-            logger.info(f"Connected to Qdrant at {self.qdrant_url} (collection: {QDRANT_COLLECTION})")
+            logger.info(f"Connected to Qdrant at {self.qdrant_url} (collection: {QDRANT_COLLECTION}, dim: {VECTOR_DIM})")
         except Exception as e:
             self._qdrant_available = False
             self._qdrant_client = None
@@ -320,7 +332,7 @@ class DatabaseManager:
 
     # ---------------- Vector Search ----------------
 
-    def search_face(self, query_vector: np.ndarray, threshold: float = 0.12) -> Optional[dict]:
+    def search_face(self, query_vector: np.ndarray, threshold: float = 0.35) -> Optional[dict]:
         """Match query face embedding against stored vectors.
 
         Uses Qdrant if available; otherwise performs vectorized NumPy cosine matching.
@@ -349,7 +361,7 @@ class DatabaseManager:
                         "engine": "qdrant",
                     }
                 else:
-                    # Still find closest for display/audit
+                    # Not authorized: find closest distance for logging/metrics but report name as Unknown
                     all_hits = self._qdrant_client.query_points(
                         collection_name=QDRANT_COLLECTION,
                         query=query_vec.tolist(),
@@ -360,7 +372,7 @@ class DatabaseManager:
                         best = points2[0]
                         dist = round(1.0 - float(best.score), 4)
                         return {
-                            "name": best.payload.get("name", "Unknown"),
+                            "name": "Unknown",
                             "distance": dist,
                             "authorized": False,
                             "engine": "qdrant",
@@ -381,12 +393,13 @@ class DatabaseManager:
         dists = 1.0 - (dots / (norm_mat * norm_q))
         min_idx = int(np.argmin(dists))
         best_dist = float(dists[min_idx])
-        best_name = names[min_idx]
+        is_auth = best_dist <= threshold
+        best_name = names[min_idx] if is_auth else "Unknown"
 
         return {
             "name": best_name,
             "distance": round(best_dist, 4),
-            "authorized": best_dist <= threshold,
+            "authorized": is_auth,
             "engine": "sqlite_numpy",
         }
 

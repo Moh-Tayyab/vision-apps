@@ -121,7 +121,8 @@ class MobileCameraStream:
                 if self._transform:
                     frame = apply_transform(frame, self._transform)
                 self._buffer.update(frame)
-            time.sleep(delay)
+            else:
+                time.sleep(0.01)
 
     def get_frame(self) -> Optional[np.ndarray]:
         result = self._buffer.get_latest()
@@ -454,11 +455,19 @@ def mjpeg_from_buffer(
                 scale = max_width / w
                 frame = cv2.resize(frame, (max_width, int(h * scale)), interpolation=cv2.INTER_AREA)
 
-        # Shared encode: first client encodes, rest reuse the same JPEG bytes.
-        payload = _encoded_jpeg(last_ts_seen, frame, quality)
-        if not payload:
-            time.sleep(0.01)
-            continue
+        # If transformed (e.g. bounding boxes drawn), encode directly per stream
+        if transform is not None:
+            ok, out = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            if not ok:
+                time.sleep(0.01)
+                continue
+            payload = out.tobytes()
+        else:
+            payload = _encoded_jpeg(last_ts_seen, frame, quality)
+            if not payload:
+                time.sleep(0.01)
+                continue
+
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n"

@@ -37,7 +37,7 @@ from face_engine import COSINE_THRESHOLD, DETECTOR_BACKEND, FaceEngine
 from metrics import metrics
 from security import verify_admin_access
 from streamer import FrameBuffer, MobileCameraStream, apply_transform
-from tracker import FaceTracker, _compute_iou
+from tracker import FaceTracker, _compute_iou, _boxes_conflict
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("face_auth.main")
@@ -64,9 +64,9 @@ _CAMERA_TRANSFORM: str = os.getenv("CAMERA_TRANSFORM", "none")
 _CAMERA_TRANSFORM_FILE: str = os.getenv("CAMERA_TRANSFORM_FILE", "./data/camera_transform.txt")
 
 # Sensitivity & Detection Parameters
-MIN_FACE_SIZE: int = int(os.getenv("MIN_FACE_SIZE", "40"))
+MIN_FACE_SIZE: int = int(os.getenv("MIN_FACE_SIZE", "45"))
 DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.65"))
-COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.12"))
+COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.48"))
 INFERENCE_MAX_WIDTH: int = int(os.getenv("INFERENCE_MAX_WIDTH", "640"))
 
 # Detection Cache & Async Inference
@@ -244,7 +244,7 @@ def _verify_frame(
     for c in candidates:
         overlap = False
         for k in kept_candidates:
-            if _compute_iou(c["bbox"], k["bbox"]) >= 0.35:
+            if _boxes_conflict(c["bbox"], k["bbox"]):
                 overlap = True
                 break
         if not overlap:
@@ -280,24 +280,20 @@ def _verify_frame(
             })
             continue
 
-        # Extract high-resolution face crop from original un-downscaled image
-        # with a 10% safety margin for features
-        pad_x = int(fw * 0.10)
-        pad_y = int(fh * 0.10)
-        crop_x1 = max(0, x1 - pad_x)
-        crop_y1 = max(0, y1 - pad_y)
-        crop_x2 = min(w, x2 + pad_x)
-        crop_y2 = min(h, y2 + pad_y)
-
-        orig_crop = image[crop_y1:crop_y2, crop_x1:crop_x2]
-        if orig_crop.size > 0:
-            face_crop = orig_crop
-        else:
-            raw_crop = face["face"]
+        # Use aligned face crop from DeepFace.extract_faces for canonical representation
+        raw_crop = face.get("face")
+        if raw_crop is not None and getattr(raw_crop, "size", 0) > 0:
             if np.issubdtype(raw_crop.dtype, np.floating) and raw_crop.max() <= 1.05:
-                face_crop = (raw_crop * 255.0).astype(np.uint8)
+                face_crop = np.clip(raw_crop * 255.0, 0, 255).astype(np.uint8)
             else:
                 face_crop = raw_crop.astype(np.uint8)
+        else:
+            crop_x1 = max(0, x1)
+            crop_y1 = max(0, y1)
+            crop_x2 = min(w, x2)
+            crop_y2 = min(h, y2)
+            orig_crop = image[crop_y1:crop_y2, crop_x1:crop_x2]
+            face_crop = orig_crop if orig_crop.size > 0 else np.zeros((100, 100, 3), dtype=np.uint8)
 
         # Glare / over-exposure rejection: skip pure white light patches
         if face_crop.size > 0:
@@ -308,7 +304,7 @@ def _verify_frame(
         # Step 1: Passive Liveness & Anti-Spoofing Check
         # Only run anti-spoof on legitimate face candidates (confidence >= 0.50)
         liveness_res = anti_spoof.check_liveness(face_crop) if check_liveness else None
-        is_live = liveness_res.is_real if liveness_res else True
+        is_live = (liveness_res.is_real if anti_spoof.enabled else True) if liveness_res else True
         liveness_score = liveness_res.liveness_score if liveness_res else 1.0
 
         entry = {
@@ -319,24 +315,40 @@ def _verify_frame(
         }
 
         if not is_live:
-            # 2D Presentation attack / screen spoof detected
             entry.update(
-                status="spoof",
-                matched_name="SPOOF DETECTED",
+                status="unauthorized",
+                matched_name="Unknown",
                 reason="presentation_attack",
                 distance=None,
             )
         else:
             # Step 2: Vector Search via Database / Qdrant
             match = engine.identify_face(face_crop, threshold=eff_cosine)
-            if match is None:
-                # No enrolled persons, OR the face crop is too small/degraded to
-                # trust an identity (reject ceiling) — never guess a name here.
-                entry.update(status="unknown", reason="no match / face too small")
+            # DEBUG: Log every face match result with full distance details
+            try:
+                _q = engine.extract_embedding(face_crop)
+                if _q is not None:
+                    _ns, _mt = engine.db.get_all_embeddings_matrix()
+                    if _mt.size > 0:
+                        import numpy as _np2
+                        _nm = _np2.linalg.norm(_mt, axis=1) + 1e-8
+                        _nq = _np2.linalg.norm(_q) + 1e-8
+                        _ds = 1.0 - ((_mt @ _q) / (_nm * _nq))
+                        _dstr = ", ".join(f"{_ns[_i]}={float(_ds[_i]):.4f}" for _i in range(len(_ns)))
+                        logger.warning(f"FACE_DEBUG bbox=[{x1},{y1},{x2},{y2}] fw={fw} match={match} dists=[{_dstr}]")
+            except Exception as _e:
+                logger.warning(f"FACE_DEBUG error: {_e}")
+            if match is None or not match.get("authorized", False):
+                entry.update(
+                    status="unauthorized",
+                    matched_name="Unknown",
+                    distance=match.get("distance") if match else None,
+                    reason="unauthorized_person",
+                )
             else:
                 entry["matched_name"] = match["name"]
                 entry["distance"] = match["distance"]
-                entry["status"] = "authorized" if match["authorized"] else "unauthorized"
+                entry["status"] = "authorized"
                 entry["vector_engine"] = match.get("engine", "sqlite_numpy")
 
         raw_detections.append(entry)
@@ -602,19 +614,19 @@ async def update_sensitivity_settings(
     if preset:
         p = preset.lower().strip()
         if p in ("long_distance", "far", "high_sensitivity"):
-            MIN_FACE_SIZE = 32
-            DETECTION_CONFIDENCE = 0.55
-            COSINE_MATCH_THRESHOLD = 0.15
+            MIN_FACE_SIZE = 36
+            DETECTION_CONFIDENCE = 0.60
+            COSINE_MATCH_THRESHOLD = 0.38
             INFERENCE_MAX_WIDTH = 640
         elif p in ("balanced", "medium", "standard"):
-            MIN_FACE_SIZE = 40
+            MIN_FACE_SIZE = 45
             DETECTION_CONFIDENCE = 0.65
-            COSINE_MATCH_THRESHOLD = 0.12
+            COSINE_MATCH_THRESHOLD = 0.35
             INFERENCE_MAX_WIDTH = 640
         elif p in ("strict", "close", "high_security"):
-            MIN_FACE_SIZE = 48
-            DETECTION_CONFIDENCE = 0.75
-            COSINE_MATCH_THRESHOLD = 0.09
+            MIN_FACE_SIZE = 50
+            DETECTION_CONFIDENCE = 0.72
+            COSINE_MATCH_THRESHOLD = 0.30
             INFERENCE_MAX_WIDTH = 640
         else:
             raise HTTPException(status_code=422, detail=f"Unknown preset '{preset}'. Choose: long_distance | balanced | strict")
@@ -844,8 +856,17 @@ async def stream():
     """Raw MJPEG stream from the active camera."""
     from streamer import mjpeg_from_buffer
 
-    gen = mjpeg_from_buffer(_get_active_buffer())
-    return StreamingResponse(gen, media_type="multipart/x-mixed-replace; boundary=frame")
+    gen = mjpeg_from_buffer(_get_active_buffer(), quality=70)
+    return StreamingResponse(
+        gen,
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/stream/detect")
@@ -873,9 +894,10 @@ async def stream_detect():
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
 
             if status == "authorized":
-                label = f"AUTHORIZED: {f.get('matched_name', '')}"
+                name = f.get('matched_name', 'Authorized')
+                label = f"AUTHORIZED: {name}"
             else:
-                label = f"UNAUTHORIZED"
+                label = "UNAUTHORIZED (Unknown)"
 
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
             cv2.rectangle(vis, (x1, max(0, y1 - th - 8)), (x1 + tw + 6, y1), color, -1)
@@ -885,13 +907,22 @@ async def stream_detect():
                 (x1 + 3, max(th + 2, y1 - 4)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
-                (255, 255, 255) if status != "spoof" else (0, 0, 0),
+                (255, 255, 255),
                 2,
             )
         return vis
 
-    gen = mjpeg_from_buffer(_get_active_buffer(), quality=75, transform=annotate)
-    return StreamingResponse(gen, media_type="multipart/x-mixed-replace; boundary=frame")
+    gen = mjpeg_from_buffer(_get_active_buffer(), quality=70, transform=annotate)
+    return StreamingResponse(
+        gen,
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---- Unified live-stream control (matches carton_counter App 1) ----
@@ -1116,38 +1147,32 @@ async def mobile_camera_page():
             .https-banner {{ background: #7c2d12; border: 1px solid #ea580c; border-radius: 12px; padding: 12px; margin-bottom: 15px; text-align: left; font-size: 0.85rem; }}
             .https-banner h3 {{ color: #fdba74; font-size: 0.95rem; margin-bottom: 4px; }}
             
-            .camera-container {{ position: relative; width: 100%; max-width: 480px; margin: 0 auto 12px; border-radius: 16px; overflow: hidden; background: #1e293b; border: 2px solid #334155; aspect-ratio: 4/3; }}
-            video {{ width: 100%; height: 100%; object-fit: cover; }}
-            canvas {{ display: none; }}
-            .snap-preview {{ max-width: 100%; border-radius: 8px; margin-top: 10px; display: none; }}
-            
-            .stats-badge {{ position: absolute; top: 10px; left: 10px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(6px); border: 1px solid #38bdf8; border-radius: 20px; padding: 5px 12px; font-size: 0.8rem; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 6px; }}
-            .live-dot {{ width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; animation: pulse 1.5s infinite; }}
-            @keyframes pulse {{ 0%, 100% {{ opacity: 1; transform: scale(1); }} 50% {{ opacity: 0.4; transform: scale(0.85); }} }}
-            
-            .controls {{ display: flex; flex-direction: column; gap: 10px; max-width: 480px; margin: 0 auto; }}
-            .btn {{ width: 100%; padding: 13px; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: bold; cursor: pointer; transition: all 0.2s; }}
-            .btn-start {{ background: linear-gradient(135deg, #0284c7, #0369a1); color: white; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3); }}
-            .btn-snap {{ background: linear-gradient(135deg, #22c55e, #16a34a); color: white; box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3); }}
-            .btn-stop {{ background: #ef4444; color: white; display: none; }}
-            .btn-switch {{ background: #334155; color: #e2e8f0; }}
-            .btn-https {{ background: #ea580c; color: white; margin-top: 8px; }}
-            
             .cam-toggle-group {{ display: flex; gap: 8px; max-width: 480px; margin: 0 auto 10px; }}
             .cam-toggle-btn {{ flex: 1; padding: 10px 12px; border-radius: 10px; background: #1e293b; color: #94a3b8; border: 1.5px solid #334155; font-size: 0.85rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s; }}
             .cam-toggle-btn.active {{ background: #0369a1; color: #fff; border-color: #38bdf8; box-shadow: 0 0 12px rgba(56, 189, 248, 0.3); }}
+
+            .lens-switcher {{ display: none; align-items: center; justify-content: space-between; margin: 0 auto 10px; max-width: 480px; background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 8px 12px; font-size: 0.82rem; }}
+            .lens-switcher select {{ background: #0f172a; color: #f8fafc; border: 1px solid #475569; border-radius: 6px; padding: 4px 8px; font-size: 0.82rem; outline: none; max-width: 260px; }}
 
             .rot-group {{ display: flex; gap: 6px; max-width: 480px; margin: 0 auto 10px; }}
             .rot-btn {{ flex: 1; padding: 8px; border-radius: 8px; background: #1e293b; color: #94a3b8; border: 1px solid #334155; font-size: 0.78rem; cursor: pointer; }}
             .rot-btn.active {{ background: #0284c7; color: white; border-color: #38bdf8; }}
 
-            .camera-container {{ position: relative; width: 100%; max-width: 480px; margin: 0 auto 12px; border-radius: 16px; overflow: hidden; background: #1e293b; border: 2px solid #334155; aspect-ratio: 4/3; }}
-            video {{ width: 100%; height: 100%; object-fit: cover; }}
+            .zoom-panel {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 10px 14px; margin: 0 auto 10px; max-width: 480px; text-align: left; display: none; }}
+            .zoom-title {{ display: flex; justify-content: space-between; align-items: center; font-size: 0.83rem; color: #e2e8f0; margin-bottom: 8px; }}
+            .zoom-btn-sm {{ padding: 3px 8px; font-size: 0.75rem; background: #0284c7; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }}
+            .zoom-controls-row {{ display: flex; align-items: center; gap: 8px; }}
+            .zoom-quick-btn {{ padding: 6px 10px; border-radius: 8px; background: #0f172a; color: #94a3b8; border: 1px solid #334155; font-size: 0.78rem; font-weight: 600; cursor: pointer; white-space: nowrap; }}
+            .zoom-quick-btn.active {{ background: #0284c7; color: white; border-color: #38bdf8; }}
+            .zoom-controls-row input[type="range"] {{ flex: 1; accent-color: #38bdf8; cursor: pointer; }}
+
+            .camera-container {{ position: relative; width: 100%; max-width: 480px; margin: 0 auto 12px; border-radius: 16px; overflow: hidden; background: #000; border: 2px solid #334155; min-height: 240px; display: flex; align-items: center; justify-content: center; }}
+            video {{ width: 100%; height: auto; max-height: 60vh; object-fit: contain; display: block; }}
             video.mirror {{ transform: scaleX(-1); }}
             canvas {{ display: none; }}
             .snap-preview {{ max-width: 100%; border-radius: 8px; margin-top: 10px; display: none; }}
 
-            .stats-badge {{ position: absolute; top: 10px; left: 10px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(6px); border: 1px solid #38bdf8; border-radius: 20px; padding: 5px 12px; font-size: 0.8rem; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 6px; }}
+            .stats-badge {{ position: absolute; top: 10px; left: 10px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(6px); border: 1px solid #38bdf8; border-radius: 20px; padding: 5px 12px; font-size: 0.8rem; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 6px; z-index: 10; }}
             .live-dot {{ width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; animation: pulse 1.5s infinite; }}
             @keyframes pulse {{ 0%, 100% {{ opacity: 1; transform: scale(1); }} 50% {{ opacity: 0.4; transform: scale(0.85); }} }}
 
@@ -1197,6 +1222,13 @@ async def mobile_camera_page():
             </button>
         </div>
 
+        <!-- Multi-Lens Dropdown (if device has multiple back sensors) -->
+        <div class="lens-switcher" id="lensSwitcher">
+            <span style="color: #94a3b8;">Lens:</span>
+            <select id="cameraSelect" onchange="onCameraDeviceChange(this.value)">
+            </select>
+        </div>
+
         <!-- Orientation Rotation Controls -->
         <div class="rot-group">
             <button class="rot-btn active" id="rot-none" onclick="setOrientation('none')">Normal</button>
@@ -1204,6 +1236,20 @@ async def mobile_camera_page():
             <button class="rot-btn" id="rot-ccw" onclick="setOrientation('rotate_90_ccw')">🔄 90° CCW</button>
             <button class="rot-btn" id="rot-180" onclick="setOrientation('rotate_180')">🔄 180°</button>
             <button class="rot-btn" id="rot-fliph" onclick="setOrientation('flip_h')">🪞 Flip</button>
+        </div>
+
+        <!-- Zoom Control Panel -->
+        <div class="zoom-panel" id="zoomPanel">
+            <div class="zoom-title">
+                <span>🔍 Zoom: <strong id="zoomValLabel" style="color: #38bdf8;">1.0x</strong> (Normal)</span>
+                <button type="button" class="zoom-btn-sm" onclick="setZoomLevel(1.0)">Reset 1x Normal</button>
+            </div>
+            <div class="zoom-controls-row">
+                <button type="button" class="zoom-quick-btn" id="btnZoomWide" onclick="setZoomLevel(0.5)">0.5x Wide</button>
+                <button type="button" class="zoom-quick-btn active" id="btnZoomNormal" onclick="setZoomLevel(1.0)">1.0x Normal</button>
+                <button type="button" class="zoom-quick-btn" id="btnZoom2x" onclick="setZoomLevel(2.0)">2.0x</button>
+                <input type="range" id="zoomSlider" min="1" max="3" step="0.1" value="1" oninput="onZoomSliderChange(this.value)">
+            </div>
         </div>
 
         <div class="camera-container">
@@ -1255,8 +1301,12 @@ async def mobile_camera_page():
             let canvas = document.getElementById('canvas');
             let snapPreview = document.getElementById('snapPreview');
             let stream = null;
+            let currentTrack = null;
             let streamInterval = null;
             let facingMode = 'environment';
+            let selectedDeviceId = null;
+            let availableVideoDevices = [];
+            let currentZoom = 1.0;
             let frameCount = 0;
             let lastFrameTime = Date.now();
             let currentOrientation = 'none';
@@ -1273,11 +1323,11 @@ async def mobile_camera_page():
 
             async function selectCameraMode(mode) {{
                 facingMode = mode;
+                selectedDeviceId = null;
                 document.getElementById('btnCamBack').classList.toggle('active', mode === 'environment');
                 document.getElementById('btnCamFront').classList.toggle('active', mode === 'user');
                 document.getElementById('activeCamText').textContent = mode === 'user' ? 'Front Camera (Selfie)' : 'Back Camera (Main)';
 
-                // Apply mirror CSS on front camera for natural selfie view
                 if (mode === 'user') {{
                     video.classList.add('mirror');
                 }} else {{
@@ -1302,6 +1352,107 @@ async def mobile_camera_page():
                 }} catch(e) {{}}
             }}
 
+            async function enumerateLenses() {{
+                if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+                try {{
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    availableVideoDevices = devices.filter(d => d.kind === 'videoinput');
+                    const switcher = document.getElementById('lensSwitcher');
+                    const select = document.getElementById('cameraSelect');
+                    if (availableVideoDevices.length > 1 && switcher && select) {{
+                        select.innerHTML = '';
+                        availableVideoDevices.forEach((dev, idx) => {{
+                            const opt = document.createElement('option');
+                            opt.value = dev.deviceId;
+                            let label = dev.label || ('Lens ' + (idx + 1));
+                            opt.textContent = label;
+                            if (dev.deviceId === selectedDeviceId) opt.selected = true;
+                            select.appendChild(opt);
+                        }});
+                        switcher.style.display = 'flex';
+                    }}
+                }} catch(e) {{
+                    console.warn('enumerateDevices error:', e);
+                }}
+            }}
+
+            async function onCameraDeviceChange(deviceId) {{
+                selectedDeviceId = deviceId;
+                if (stream) {{
+                    await startCamera();
+                }}
+            }}
+
+            async function initZoomControl(track) {{
+                if (!track || !track.getCapabilities) return;
+                try {{
+                    const caps = track.getCapabilities();
+                    const zoomPanel = document.getElementById('zoomPanel');
+                    if (caps.zoom) {{
+                        zoomPanel.style.display = 'block';
+                        const slider = document.getElementById('zoomSlider');
+                        const minZ = caps.zoom.min || 1.0;
+                        const maxZ = caps.zoom.max || 3.0;
+                        const stepZ = caps.zoom.step || 0.1;
+
+                        slider.min = minZ;
+                        slider.max = Math.min(maxZ, 5.0);
+                        slider.step = stepZ;
+
+                        // Default to normal 1.0x (or min if min >= 1.0)
+                        let targetZoom = 1.0;
+                        if (targetZoom < minZ) targetZoom = minZ;
+                        if (targetZoom > maxZ) targetZoom = maxZ;
+
+                        try {{
+                            await track.applyConstraints({{ advanced: [{{ zoom: targetZoom }}] }});
+                            currentZoom = targetZoom;
+                        }} catch(e) {{
+                            console.warn('Could not set initial zoom:', e);
+                        }}
+                        slider.value = currentZoom;
+                        updateZoomUI(currentZoom);
+                    }} else {{
+                        zoomPanel.style.display = 'none';
+                    }}
+                }} catch(e) {{
+                    console.warn('initZoomControl error:', e);
+                }}
+            }}
+
+            async function setZoomLevel(val) {{
+                if (!currentTrack || !currentTrack.applyConstraints) return;
+                try {{
+                    const caps = currentTrack.getCapabilities ? currentTrack.getCapabilities() : {{}};
+                    if (caps.zoom) {{
+                        const clamped = Math.max(caps.zoom.min, Math.min(val, caps.zoom.max));
+                        await currentTrack.applyConstraints({{ advanced: [{{ zoom: clamped }}] }});
+                        currentZoom = clamped;
+                        document.getElementById('zoomSlider').value = clamped;
+                        updateZoomUI(clamped);
+                    }}
+                }} catch(e) {{
+                    console.warn('Error setting zoom:', e);
+                }}
+            }}
+
+            function onZoomSliderChange(val) {{
+                setZoomLevel(parseFloat(val));
+            }}
+
+            function updateZoomUI(val) {{
+                const lbl = document.getElementById('zoomValLabel');
+                if (lbl) {{
+                    lbl.textContent = val.toFixed(1) + 'x';
+                }}
+                const btnWide = document.getElementById('btnZoomWide');
+                const btnNormal = document.getElementById('btnZoomNormal');
+                const btn2x = document.getElementById('btnZoom2x');
+                if (btnWide) btnWide.classList.toggle('active', Math.abs(val - 0.5) < 0.15);
+                if (btnNormal) btnNormal.classList.toggle('active', Math.abs(val - 1.0) < 0.15);
+                if (btn2x) btn2x.classList.toggle('active', Math.abs(val - 2.0) < 0.15);
+            }}
+
             async function startCamera() {{
                 document.getElementById('permBanner').style.display = 'none';
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
@@ -1313,26 +1464,30 @@ async def mobile_camera_page():
                     if (stream) {{
                         stream.getTracks().forEach(t => t.stop());
                         stream = null;
+                        currentTrack = null;
                     }}
                     video.srcObject = null;
 
+                    let videoConstraints = {{
+                        width: {{ ideal: 1280 }},
+                        height: {{ ideal: 720 }}
+                    }};
+
+                    if (selectedDeviceId) {{
+                        videoConstraints.deviceId = {{ exact: selectedDeviceId }};
+                    }} else {{
+                        videoConstraints.facingMode = {{ ideal: facingMode }};
+                    }}
+
                     try {{
                         stream = await navigator.mediaDevices.getUserMedia({{
-                            video: {{
-                                facingMode: {{ exact: facingMode }},
-                                width: {{ ideal: 1280 }},
-                                height: {{ ideal: 720 }}
-                            }},
+                            video: videoConstraints,
                             audio: false
                         }});
-                    }} catch(eExact) {{
+                    }} catch(eConstraint) {{
                         try {{
                             stream = await navigator.mediaDevices.getUserMedia({{
-                                video: {{
-                                    facingMode: {{ ideal: facingMode }},
-                                    width: {{ ideal: 1280 }},
-                                    height: {{ ideal: 720 }}
-                                }},
+                                video: {{ facingMode: {{ ideal: facingMode }} }},
                                 audio: false
                             }});
                         }} catch(eIdeal) {{
@@ -1345,6 +1500,14 @@ async def mobile_camera_page():
                     video.srcObject = stream;
                     await video.play();
 
+                    await enumerateLenses();
+
+                    const tracks = stream.getVideoTracks();
+                    if (tracks.length > 0) {{
+                        currentTrack = tracks[0];
+                        await initZoomControl(currentTrack);
+                    }}
+
                     document.getElementById('startBtn').style.display = 'none';
                     document.getElementById('stopBtn').style.display = 'block';
                     document.getElementById('liveBadge').style.display = 'flex';
@@ -1354,6 +1517,7 @@ async def mobile_camera_page():
                     if (streamInterval) clearInterval(streamInterval);
                     streamInterval = setInterval(sendFrame, 33);
                 }} catch (err) {{
+                    console.error('Camera start error:', err);
                     document.getElementById('permBanner').style.display = 'block';
                     document.getElementById('streamStatus').textContent = 'Permission Denied / Camera Error';
                     document.getElementById('streamStatus').style.color = '#ef4444';
@@ -1368,11 +1532,13 @@ async def mobile_camera_page():
                 if (stream) {{
                     stream.getTracks().forEach(t => t.stop());
                     stream = null;
+                    currentTrack = null;
                 }}
                 video.srcObject = null;
                 document.getElementById('startBtn').style.display = 'block';
                 document.getElementById('stopBtn').style.display = 'none';
                 document.getElementById('liveBadge').style.display = 'none';
+                document.getElementById('zoomPanel').style.display = 'none';
                 document.getElementById('streamStatus').textContent = 'Stopped';
                 document.getElementById('streamStatus').style.color = '#94a3b8';
             }}

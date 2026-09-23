@@ -34,6 +34,22 @@ def _compute_iou(box1: List[int], box2: List[int]) -> float:
     return float(inter_area / max(1, union_area))
 
 
+def _boxes_conflict(box1: List[int], box2: List[int], iou_thresh: float = 0.22) -> bool:
+    """Check if two boxes significantly overlap or if one contains the other (e.g. face vs chest)."""
+    if _compute_iou(box1, box2) >= iou_thresh:
+        return True
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    if x2 <= x1 or y2 <= y1:
+        return False
+    inter_area = (x2 - x1) * (y2 - y1)
+    area1 = max(1, (box1[2] - box1[0]) * (box1[3] - box1[1]))
+    area2 = max(1, (box2[2] - box2[0]) * (box2[3] - box2[1]))
+    return (inter_area / area1 > 0.35) or (inter_area / area2 > 0.35)
+
+
 @dataclass
 class TrackedPerson:
     track_id: int
@@ -64,12 +80,18 @@ class TrackedPerson:
         self.last_seen = now
         self.missed_frames = 0
 
-        # Record classification history
         status = det.get("status", "unknown")
         name = det.get("matched_name")
-        self.history.append(status)
-        if name:
+
+        # If a different authorized person is detected, reset history to switch identity immediately
+        if str(status).lower() == "authorized" and name and name != "Unknown":
+            if self.matched_name and str(self.matched_name).lower() != str(name).lower() and str(self.status).lower() == "authorized":
+                self.history.clear()
+                self.name_history.clear()
+            self.history.append(status)
             self.name_history.append(name)
+        else:
+            self.history.append(status)
 
         # Majority temporal voting consensus
         if self.history:
@@ -146,9 +168,9 @@ class FaceTracker:
         for d_idx, det in enumerate(detected_faces):
             if d_idx not in matched_detections:
                 d_box = det.get("bbox", [0, 0, 0, 0])
-                # Suppress if this detection overlaps with ANY existing track
+                # Suppress if this detection overlaps or conflicts with ANY existing track
                 overlaps_existing = any(
-                    _compute_iou(d_box, trk.bbox) >= self.iou_threshold
+                    _boxes_conflict(d_box, trk.bbox)
                     for trk in self._tracks.values()
                 )
                 if overlaps_existing:
@@ -183,7 +205,7 @@ class FaceTracker:
         for tid in to_remove:
             del self._tracks[tid]
 
-        # Inter-track deduplication: If any 2 active tracks overlap, keep the stronger one
+        # Inter-track deduplication: If any 2 active tracks overlap or conflict, keep the stronger one
         active_list = sorted(
             self._tracks.values(),
             key=lambda t: (t.confidence, -t.missed_frames, len(t.history)),
@@ -194,12 +216,26 @@ class FaceTracker:
         for trk in active_list:
             conflict = False
             for kept in final_tracks:
-                if _compute_iou(trk.bbox, kept.bbox) >= 0.30:
+                if _boxes_conflict(trk.bbox, kept.bbox):
                     conflict = True
                     break
             if not conflict:
                 final_tracks.append(trk)
                 kept_tids.add(trk.track_id)
+
+        # Enforce unique authorized identity per frame:
+        # A single enrolled person cannot be at two different places at the exact same moment.
+        # If 2 tracks claim the same authorized name, the one with better distance/confidence wins.
+        claimed_names = set()
+        for trk in final_tracks:
+            if str(trk.status).lower() == "authorized" and trk.matched_name and trk.matched_name != "Unknown":
+                if trk.matched_name in claimed_names:
+                    trk.status = "unauthorized"
+                    trk.matched_name = "Unknown"
+                    trk.history.clear()
+                    trk.name_history.clear()
+                else:
+                    claimed_names.add(trk.matched_name)
 
         # Remove superseded duplicate tracks from memory
         for tid in list(self._tracks.keys()):

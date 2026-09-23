@@ -38,8 +38,9 @@ class AntiSpoofResult:
 class AntiSpoofEngine:
     """Real-time passive face anti-spoofing analyzer."""
 
-    def __init__(self, default_threshold: float = 0.50):
+    def __init__(self, default_threshold: float = 0.30):
         self.threshold = float(os.getenv("LIVENESS_THRESHOLD", str(default_threshold)))
+        self.enabled = os.getenv("ENABLE_ANTI_SPOOF", "false").lower() in ("true", "1", "yes")
 
     def check_liveness(self, face_bgr: np.ndarray) -> AntiSpoofResult:
         """Evaluate whether a cropped face is a live human or a 2D presentation attack (screen/photo)."""

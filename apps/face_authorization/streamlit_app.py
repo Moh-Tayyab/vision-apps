@@ -376,7 +376,7 @@ elif page == "Live Detection":
                     "📷 Mobile IP Webcam (URL e.g. http://phone-ip:8080/video)",
                     "🔌 USB Webcam Device",
                 ],
-                index=0 if cam_health.get("source_type") == "mobile" else (1 if cam_health.get("source_type") == "http_mjpeg" else 2),
+                index=2 if (cam_health.get("source_type") == "usb" or devices) else (1 if cam_health.get("source_type") == "http_mjpeg" else 0),
                 horizontal=True,
             )
 
@@ -501,7 +501,7 @@ elif page == "Live Detection":
                 st.rerun()
 
         # Live Annotated MJPEG Stream
-        st.caption("Live Feed: 🟩 Green = AUTHORIZED, 🟥 Red = UNAUTHORIZED")
+        st.caption("Live Feed: 🟩 Green = AUTHORIZED (Name), 🟥 Red = UNAUTHORIZED (Unknown)")
         
         st.markdown(
             f"""

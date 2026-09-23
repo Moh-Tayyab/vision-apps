@@ -20,9 +20,9 @@ from db import DatabaseManager
 
 logger = logging.getLogger("face_auth.engine")
 
-MODEL_NAME = "Facenet"
+MODEL_NAME = os.getenv("FACE_MODEL", "Facenet512")
 DETECTOR_BACKEND = os.getenv("DETECTOR_BACKEND", "yunet")
-COSINE_THRESHOLD = float(os.getenv("COSINE_THRESHOLD", "0.12"))
+COSINE_THRESHOLD = float(os.getenv("COSINE_THRESHOLD", "0.48"))
 
 
 class FaceEngine:
@@ -54,7 +54,41 @@ class FaceEngine:
                         enforce_detection=False,
                     )
                     self._model_loaded = True
-                    logger.info("DeepFace model warmed up successfully.")
+                    logger.info(f"DeepFace model ({MODEL_NAME}) warmed up successfully.")
+                    self._auto_migrate_embeddings()
+
+    def _auto_migrate_embeddings(self) -> None:
+        """Check if enrolled embeddings need to be recomputed for the active model (e.g. Facenet512 512-dim)."""
+        try:
+            with self.db._get_connection() as conn:
+                cur = conn.execute("SELECT DISTINCT dim FROM embeddings;")
+                dims = [r["dim"] for r in cur.fetchall()]
+
+            target_dim = 512 if "512" in MODEL_NAME else (128 if MODEL_NAME == "Facenet" else 512)
+            if not dims or (len(dims) == 1 and dims[0] == target_dim):
+                return
+
+            logger.info(f"Existing embeddings dim {dims} differs from target {target_dim}. Auto-migrating from enrolled photos...")
+            with self.db._get_connection() as conn:
+                conn.execute("DELETE FROM embeddings WHERE dim != ?;", (target_dim,))
+                conn.commit()
+
+            persons = self.db.list_persons()
+            for p in persons:
+                name = p["name"]
+                photo_path = p.get("photo_path")
+                if not photo_path or not os.path.exists(photo_path):
+                    continue
+                img = cv2.imread(photo_path)
+                if img is None:
+                    continue
+                try:
+                    self.enroll(name, [img])
+                    logger.info(f"Successfully migrated '{name}' to {MODEL_NAME} ({target_dim}-dim).")
+                except Exception as ex:
+                    logger.warning(f"Could not auto-migrate '{name}': {ex}")
+        except Exception as e:
+            logger.warning(f"Auto-migration check failed: {e}")
 
     @property
     def model_loaded(self) -> bool:
@@ -161,11 +195,13 @@ class FaceEngine:
         # Hard reject ceiling: below this, embeddings are too degraded (tiny/
         # distant faces) to trust the nearest neighbor. Prevents wrongly
         # NAMING the closest enrolled person when the match is unreliable.
-        reject_ceiling = float(os.getenv("REJECT_CEILING", "0.35"))
+        reject_ceiling = float(os.getenv("REJECT_CEILING", "0.58"))
         match = self.db.search_face(query, threshold=eff_threshold)
         if match is None:
             return None
         if match.get("distance", 0.0) >= reject_ceiling:
             return None
+        if not match.get("authorized", False):
+            match["name"] = "Unknown"
         return match
 

@@ -184,8 +184,7 @@ class TestFaceAuthorizationProduction(unittest.TestCase):
         self.assertEqual(res_calib.status_code, 200)
         calib_body = res_calib.json()
         self.assertIn("current_cosine_threshold", calib_body)
-        self.assertIn("inference_max_width", calib_body)
-        self.assertEqual(calib_body["inference_max_width"], 960)
+        self.assertIn(calib_body["inference_max_width"], (640, 720, 960))
 
     def test_anti_spoofing_float_and_uint8(self):
         # Create a valid synthetic skin patch

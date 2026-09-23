@@ -304,8 +304,8 @@ class CameraSource:
                     # on-board webcam: faces stay large enough for reliable face
                     # matching (oversized crops at 640x480 cross-match at distance),
                     # yet the stream stays fluid. Override with USB_WIDTH / USB_HEIGHT.
-                    width = int(os.getenv("USB_WIDTH", "960"))
-                    height = int(os.getenv("USB_HEIGHT", "540"))
+                    width = int(os.getenv("USB_WIDTH", "640"))
+                    height = int(os.getenv("USB_HEIGHT", "480"))
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -415,13 +415,20 @@ class CameraManager:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self.camera = CameraSource(source_type="mobile", source_uri="browser")
+        default_source = os.getenv("CAMERA_DEFAULT_SOURCE", "mobile").lower()
+        fps = int(os.getenv("STREAM_FPS", "30"))
+        if default_source == "usb":
+            dev_idx = os.getenv("USB_DEVICE_INDEX", "0")
+            self.camera = CameraSource(source_type="usb", source_uri=dev_idx, target_fps=fps)
+            self.camera.start()
+        else:
+            self.camera = CameraSource(source_type="mobile", source_uri="browser", target_fps=fps)
 
     def configure_camera(
         self,
         source_type: str,
         source_uri: Union[str, int],
-        target_fps: int = 15,
+        target_fps: int = 30,
     ) -> CameraHealth:
         """Reconfigure or start a camera stream source dynamically."""
         with self._lock:
@@ -445,4 +452,6 @@ class CameraManager:
         return self.camera.get_health()
 
     def stop(self) -> None:
-        self.camera.stop()
+        with self._lock:
+            self.camera.stop()
+            self.camera = CameraSource(source_type="mobile", source_uri="browser", target_fps=30)
