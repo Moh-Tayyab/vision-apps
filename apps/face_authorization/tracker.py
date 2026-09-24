@@ -34,20 +34,36 @@ def _compute_iou(box1: List[int], box2: List[int]) -> float:
     return float(inter_area / max(1, union_area))
 
 
-def _boxes_conflict(box1: List[int], box2: List[int], iou_thresh: float = 0.22) -> bool:
-    """Check if two boxes significantly overlap or if one contains the other (e.g. face vs chest)."""
+def _boxes_conflict(box1: List[int], box2: List[int], iou_thresh: float = 0.20) -> bool:
+    """Check if two boxes significantly overlap, intersect, or have close centers."""
     if _compute_iou(box1, box2) >= iou_thresh:
         return True
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
     y2 = min(box1[3], box2[3])
-    if x2 <= x1 or y2 <= y1:
-        return False
-    inter_area = (x2 - x1) * (y2 - y1)
-    area1 = max(1, (box1[2] - box1[0]) * (box1[3] - box1[1]))
-    area2 = max(1, (box2[2] - box2[0]) * (box2[3] - box2[1]))
-    return (inter_area / area1 > 0.35) or (inter_area / area2 > 0.35)
+    if x2 > x1 and y2 > y1:
+        inter_area = (x2 - x1) * (y2 - y1)
+        area1 = max(1, (box1[2] - box1[0]) * (box1[3] - box1[1]))
+        area2 = max(1, (box2[2] - box2[0]) * (box2[3] - box2[1]))
+        min_area = min(area1, area2)
+        # If 20% or more of either box area is shared, treat as conflicting duplicate
+        if (inter_area / float(min_area)) > 0.20:
+            return True
+
+    # Center distance conflict: two boxes with centers within face radius cannot be separate persons
+    c1_x = (box1[0] + box1[2]) / 2.0
+    c1_y = (box1[1] + box1[3]) / 2.0
+    c2_x = (box2[0] + box2[2]) / 2.0
+    c2_y = (box2[1] + box2[3]) / 2.0
+    dist = ((c1_x - c2_x)**2 + (c1_y - c2_y)**2)**0.5
+    w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
+    w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
+    max_dim = max(w1, h1, w2, h2)
+    if dist < max_dim * 0.75:
+        return True
+
+    return False
 
 
 @dataclass
@@ -61,18 +77,28 @@ class TrackedPerson:
     liveness_score: float = 1.0
     first_seen: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
+    last_identified_time: float = 0.0
     missed_frames: int = 0
     history: deque = field(default_factory=lambda: deque(maxlen=6))
     name_history: deque = field(default_factory=lambda: deque(maxlen=6))
 
     def update(self, det: dict, now: float, smooth_alpha: float = 0.70) -> None:
         raw_box = det.get("bbox", [0, 0, 0, 0])
-        # Exponential moving average spatial smoothing
+        # Responsive spatial tracking:
+        # If user moves (center movement > 6px), snap quickly (alpha=0.95) so the box never lags behind!
+        # If nearly static, smooth gently (alpha=0.75) for jitter-free stability.
+        c_old_x = (self.bbox[0] + self.bbox[2]) / 2.0
+        c_old_y = (self.bbox[1] + self.bbox[3]) / 2.0
+        c_new_x = (raw_box[0] + raw_box[2]) / 2.0
+        c_new_y = (raw_box[1] + raw_box[3]) / 2.0
+        move_dist = ((c_new_x - c_old_x)**2 + (c_new_y - c_old_y)**2)**0.5
+        effective_alpha = 0.95 if move_dist > 6.0 else 0.75
+
         self.bbox = [
-            int(smooth_alpha * raw_box[0] + (1.0 - smooth_alpha) * self.bbox[0]),
-            int(smooth_alpha * raw_box[1] + (1.0 - smooth_alpha) * self.bbox[1]),
-            int(smooth_alpha * raw_box[2] + (1.0 - smooth_alpha) * self.bbox[2]),
-            int(smooth_alpha * raw_box[3] + (1.0 - smooth_alpha) * self.bbox[3]),
+            int(effective_alpha * raw_box[0] + (1.0 - effective_alpha) * self.bbox[0]),
+            int(effective_alpha * raw_box[1] + (1.0 - effective_alpha) * self.bbox[1]),
+            int(effective_alpha * raw_box[2] + (1.0 - effective_alpha) * self.bbox[2]),
+            int(effective_alpha * raw_box[3] + (1.0 - effective_alpha) * self.bbox[3]),
         ]
         self.confidence = det.get("confidence", self.confidence)
         self.distance = det.get("distance", self.distance)
@@ -83,22 +109,28 @@ class TrackedPerson:
         status = det.get("status", "unknown")
         name = det.get("matched_name")
 
-        # If a different authorized person is detected, reset history to switch identity immediately
+        # If positively identified as authorized, switch identity immediately
         if str(status).lower() == "authorized" and name and name != "Unknown":
-            if self.matched_name and str(self.matched_name).lower() != str(name).lower() and str(self.status).lower() == "authorized":
+            if self.status != "authorized" or (self.matched_name and str(self.matched_name).lower() != str(name).lower()):
                 self.history.clear()
                 self.name_history.clear()
             self.history.append(status)
             self.name_history.append(name)
+            self.matched_name = name
+            self.status = "authorized"
+            self.last_identified_time = now
         else:
             self.history.append(status)
+            # If this update came from a full recognition pass (not just track_cache), update last_identified_time
+            if det.get("vector_engine") != "track_cache":
+                self.last_identified_time = now
 
         # Majority temporal voting consensus
-        if self.history:
+        if self.history and self.status != "authorized":
             cnt = Counter(self.history)
             self.status = cnt.most_common(1)[0][0]
 
-        if self.name_history:
+        if self.name_history and self.status != "authorized":
             name_cnt = Counter(self.name_history)
             self.matched_name = name_cnt.most_common(1)[0][0]
 
@@ -118,18 +150,46 @@ class TrackedPerson:
 class FaceTracker:
     """Multi-target spatial IoU tracker with temporal classification consensus."""
 
-    def __init__(self, iou_threshold: float = 0.30, max_missed_frames: int = 2):
+    def __init__(self, iou_threshold: float = 0.25, max_missed_frames: int = 4):
         self.iou_threshold = iou_threshold
         self.max_missed_frames = max_missed_frames
         self._next_track_id = 1
         self._tracks: Dict[int, TrackedPerson] = {}
+
+    def find_matching_track(self, box: List[int], iou_thresh: float = 0.20) -> Optional[TrackedPerson]:
+        """Find an active track that spatially matches this box (for identity verification caching)."""
+        best_trk = None
+        best_iou = 0.0
+        bx1, by1, bx2, by2 = box
+        bcx = (bx1 + bx2) / 2.0
+        bcy = (by1 + by2) / 2.0
+
+        for trk in self._tracks.values():
+            iou = _compute_iou(box, trk.bbox)
+            if iou > best_iou and iou >= iou_thresh:
+                best_iou = iou
+                best_trk = trk
+
+        # Fallback to Euclidean center distance if slight motion shifted the box
+        if best_trk is None:
+            best_dist = 9999.0
+            max_r = max(bx2 - bx1, by2 - by1) * 1.25
+            for trk in self._tracks.values():
+                tcx = (trk.bbox[0] + trk.bbox[2]) / 2.0
+                tcy = (trk.bbox[1] + trk.bbox[3]) / 2.0
+                dist = ((bcx - tcx)**2 + (bcy - tcy)**2) ** 0.5
+                if dist < max_r and dist < best_dist:
+                    best_dist = dist
+                    best_trk = trk
+
+        return best_trk
 
     def update(self, detected_faces: List[dict], now: Optional[float] = None) -> List[dict]:
         """Match detected faces with active tracks and return smoothed tracked persons."""
         current_time = now or time.time()
 
         if not detected_faces:
-            # Increment missed frames and purge stale tracks
+            # Increment missed frames and purge stale tracks, but DO NOT drop survivors immediately (prevents gaps)
             to_remove = []
             for tid, trk in self._tracks.items():
                 trk.missed_frames += 1
@@ -147,17 +207,32 @@ class FaceTracker:
         if active_tids:
             for d_idx, det in enumerate(detected_faces):
                 d_box = det.get("bbox", [0, 0, 0, 0])
-                best_iou = 0.0
+                best_score = 0.0
                 best_tid = None
+                dcx = (d_box[0] + d_box[2]) / 2.0
+                dcy = (d_box[1] + d_box[3]) / 2.0
+                dw = d_box[2] - d_box[0]
+                dh = d_box[3] - d_box[1]
+                max_r = max(dw, dh) * 1.25
 
                 for tid in active_tids:
                     if tid in matched_tracks:
                         continue
                     trk = self._tracks[tid]
                     iou = _compute_iou(d_box, trk.bbox)
-                    if iou > best_iou and iou >= self.iou_threshold:
-                        best_iou = iou
-                        best_tid = tid
+                    tcx = (trk.bbox[0] + trk.bbox[2]) / 2.0
+                    tcy = (trk.bbox[1] + trk.bbox[3]) / 2.0
+                    cdist = ((dcx - tcx)**2 + (dcy - tcy)**2)**0.5
+
+                    if iou >= self.iou_threshold:
+                        if iou > best_score:
+                            best_score = iou
+                            best_tid = tid
+                    elif cdist < max_r:
+                        score = 1.0 - (cdist / max_r)
+                        if score > best_score:
+                            best_score = score
+                            best_tid = tid
 
                 if best_tid is not None:
                     self._tracks[best_tid].update(det, current_time)
@@ -188,6 +263,7 @@ class FaceTracker:
                     liveness_score=det.get("liveness_score", 1.0),
                     first_seen=current_time,
                     last_seen=current_time,
+                    last_identified_time=current_time if det.get("vector_engine") != "track_cache" else 0.0,
                 )
                 trk.history.append(det.get("status", "unknown"))
                 if det.get("matched_name"):
@@ -225,9 +301,9 @@ class FaceTracker:
 
         # Enforce unique authorized identity per frame:
         # A single enrolled person cannot be at two different places at the exact same moment.
-        # If 2 tracks claim the same authorized name, the one with better distance/confidence wins.
+        # The track with the lowest distance (best vector match) wins the authorized name.
         claimed_names = set()
-        for trk in final_tracks:
+        for trk in sorted(final_tracks, key=lambda t: (t.distance if t.distance is not None else 999.0)):
             if str(trk.status).lower() == "authorized" and trk.matched_name and trk.matched_name != "Unknown":
                 if trk.matched_name in claimed_names:
                     trk.status = "unauthorized"
@@ -242,4 +318,4 @@ class FaceTracker:
             if tid not in kept_tids and tid not in to_remove:
                 del self._tracks[tid]
 
-        return [trk.to_dict() for trk in final_tracks if trk.missed_frames <= 1]
+        return [trk.to_dict() for trk in final_tracks if trk.missed_frames == 0]

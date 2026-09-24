@@ -265,19 +265,22 @@ elif page == "Enroll User":
     st.header("Enroll New User")
     st.caption("Upload **1 clear front-facing photo** of the person.")
 
-    with st.form("enroll_form", clear_on_submit=True):
+    with st.form("enroll_form", clear_on_submit=False):
         name = st.text_input("Person Name", placeholder="e.g. Muhammad Tayyab")
         photo = st.file_uploader(
             "Front-facing photo",
-            type=["jpg", "jpeg", "png"],
+            type=["jpg", "jpeg", "png", "webp", "jfif", "bmp", "JPG", "JPEG", "PNG", "WEBP", "JFIF"],
             help="Upload a clear, front-facing photo. Well-lit, single face preferred.",
         )
 
-        if photo:
-            st.divider()
-            st.subheader("Photo Preview")
-            img = Image.open(photo)
-            st.image(img, caption="Enrollment photo", width=300)
+        if photo is not None:
+            try:
+                st.divider()
+                st.subheader("Photo Preview")
+                img = Image.open(photo)
+                st.image(img, caption=f"Enrollment photo: {photo.name}", width=300)
+            except Exception as e:
+                st.warning(f"Preview unavailable: {e}")
 
         submitted = st.form_submit_button("Enroll", type="primary", use_container_width=True)
 
@@ -625,12 +628,15 @@ elif page == "Live Detection":
         st.subheader("Verify Static Image")
         uploaded = st.file_uploader(
             "Upload an image to verify",
-            type=["jpg", "jpeg", "png"],
+            type=["jpg", "jpeg", "png", "webp", "jfif", "bmp", "JPG", "JPEG", "PNG", "WEBP", "JFIF"],
             key="verify_upload",
         )
-        if uploaded:
-            img = Image.open(uploaded)
-            st.image(img, caption="Uploaded image", width=400)
+        if uploaded is not None:
+            try:
+                img = Image.open(uploaded)
+                st.image(img, caption="Uploaded image", width=400)
+            except Exception as e:
+                st.warning(f"Preview unavailable: {e}")
 
             if st.button("Verify Face", type="primary"):
                 with st.spinner("Analyzing faces..."):

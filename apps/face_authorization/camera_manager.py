@@ -317,9 +317,23 @@ class CameraSource:
                 if self.source_type in ("rtsp", "http_mjpeg"):
                     reachable, reason = _check_host_reachable(uri_str, timeout_sec=1.5)
                     if not reachable:
-                        with self._lock:
-                            self._last_error = f"Unreachable: {reason}. Ensure phone IP Webcam / DroidCam is active."
-                        return None
+                        # Auto-failover check for Dahua DVR DHCP IP change between .197 and .198
+                        alt_ip = None
+                        if "192.168.18.197" in uri_str:
+                            alt_ip = "192.168.18.198"
+                        elif "192.168.18.198" in uri_str:
+                            alt_ip = "192.168.18.197"
+                        if alt_ip:
+                            alt_uri = uri_str.replace("192.168.18.197", alt_ip).replace("192.168.18.198", alt_ip)
+                            r_alt, _ = _check_host_reachable(alt_uri, timeout_sec=1.0)
+                            if r_alt:
+                                uri_str = alt_uri
+                                self.source_uri = alt_uri
+                                reachable = True
+                        if not reachable:
+                            with self._lock:
+                                self._last_error = f"Unreachable: {reason}. Ensure camera is active."
+                            return None
 
                     if self.source_type == "rtsp":
                         os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|fflags;nobuffer|max_delay;500000"
@@ -378,11 +392,16 @@ class CameraSource:
                             self._last_error = "Frame read returned empty"
                         break
 
-                # Downscale excessively large frames (e.g. 4K) to 1280p for HD clarity on distant faces
+                # Auto-expand Dahua 1080N (960x1080) anamorphic half-width stream to proper 16:9
                 h, w = frame.shape[:2]
-                if w > 1280:
-                    scale = 1280 / w
-                    frame = cv2.resize(frame, (1280, int(h * scale)), interpolation=cv2.INTER_AREA)
+                if w == 960 and h == 1080:
+                    frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+                    h, w = 1080, 1920
+
+                # Downscale excessively large frames (e.g. 4K) to 1920p for maximum clarity on distant faces
+                if w > 1920:
+                    scale = 1920 / w
+                    frame = cv2.resize(frame, (1920, int(h * scale)), interpolation=cv2.INTER_AREA)
 
                 # Apply orientation correction so display + inference agree.
                 frame = _apply_orientation(frame)
@@ -410,25 +429,51 @@ class CameraSource:
                 backoff_sec = min(max_backoff_sec, backoff_sec * 1.4)
 
 
+CAMERA_CONFIG_FILE: str = os.path.join(os.getenv("DATA_DIR", "data"), "last_camera_config.json")
+
+
 class CameraManager:
     """Manages the active camera source for Face Authorization."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        default_source = os.getenv("CAMERA_DEFAULT_SOURCE", "mobile").lower()
-        fps = int(os.getenv("STREAM_FPS", "30"))
-        if default_source == "usb":
-            dev_idx = os.getenv("USB_DEVICE_INDEX", "0")
-            self.camera = CameraSource(source_type="usb", source_uri=dev_idx, target_fps=fps)
-            self.camera.start()
-        else:
-            self.camera = CameraSource(source_type="mobile", source_uri="browser", target_fps=fps)
+        fps = int(os.getenv("STREAM_FPS", "25"))
+
+        # Restore last connected camera if persisted
+        restored = False
+        try:
+            if os.path.exists(CAMERA_CONFIG_FILE):
+                import json
+                with open(CAMERA_CONFIG_FILE, "r") as f:
+                    cfg = json.load(f)
+                st = cfg.get("source_type", "")
+                su = cfg.get("source_uri", "")
+                tfps = int(cfg.get("target_fps", fps))
+                if st and su:
+                    self.camera = CameraSource(source_type=st, source_uri=su, target_fps=tfps)
+                    self.camera.start()
+                    restored = True
+        except Exception as e:
+            print(f"[CameraManager] restore failed: {e}")
+
+        if not restored:
+            default_source = os.getenv("CAMERA_DEFAULT_SOURCE", "mobile").lower()
+            if default_source == "usb":
+                dev_idx = os.getenv("USB_DEVICE_INDEX", "0")
+                self.camera = CameraSource(source_type="usb", source_uri=dev_idx, target_fps=fps)
+                self.camera.start()
+            elif default_source == "rtsp":
+                rtsp_uri = os.getenv("DEFAULT_RTSP_URI", "rtsp://admin:admin1234@192.168.18.198:554/cam/realmonitor?channel=2&subtype=0")
+                self.camera = CameraSource(source_type="http_mjpeg", source_uri=rtsp_uri, target_fps=fps)
+                self.camera.start()
+            else:
+                self.camera = CameraSource(source_type="mobile", source_uri="browser", target_fps=fps)
 
     def configure_camera(
         self,
         source_type: str,
         source_uri: Union[str, int],
-        target_fps: int = 30,
+        target_fps: int = 25,
     ) -> CameraHealth:
         """Reconfigure or start a camera stream source dynamically."""
         with self._lock:
@@ -439,6 +484,20 @@ class CameraManager:
                 target_fps=target_fps,
             )
             self.camera.start()
+
+            # Persist configuration so reboots/container restarts auto-connect
+            try:
+                import json
+                os.makedirs(os.path.dirname(CAMERA_CONFIG_FILE), exist_ok=True)
+                with open(CAMERA_CONFIG_FILE, "w") as f:
+                    json.dump({
+                        "source_type": source_type,
+                        "source_uri": str(source_uri),
+                        "target_fps": target_fps,
+                    }, f)
+            except Exception as e:
+                print(f"[CameraManager] failed to persist config: {e}")
+
             return self.camera.get_health()
 
     def ingest_frame(self, frame: np.ndarray) -> CameraHealth:
@@ -455,3 +514,8 @@ class CameraManager:
         with self._lock:
             self.camera.stop()
             self.camera = CameraSource(source_type="mobile", source_uri="browser", target_fps=30)
+            try:
+                if os.path.exists(CAMERA_CONFIG_FILE):
+                    os.remove(CAMERA_CONFIG_FILE)
+            except Exception:
+                pass

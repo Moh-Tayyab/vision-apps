@@ -59,3 +59,7 @@ SPEC.md
 # Docker
 docker-compose.override.yml
 
+# Agent & GSD local files (not pushed)
+AGENTS.md
+.agents
+.agent/
