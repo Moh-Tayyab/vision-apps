@@ -86,14 +86,14 @@ def _detect_connection_medium(source_type: str, uri: Union[str, int]) -> str:
     return "Wi-Fi Network / RTSP"
 
 
-def _check_host_reachable(uri: str, timeout_sec: float = 1.5) -> Tuple[bool, str]:
-    """Fast non-blocking socket reachability probe to avoid long OpenCV hangs."""
+def _check_host_reachable(uri: str, timeout_sec: float = 1.5) -> Tuple[bool, str, str]:
+    """Fast non-blocking socket reachability probe with DHCP failover."""
     try:
         parsed = urlparse(uri)
         host = parsed.hostname
         port = parsed.port
         if not host:
-            return True, "ok"
+            return True, "ok", uri
         if not port:
             port = 554 if parsed.scheme == "rtsp" else 80
 
@@ -102,10 +102,30 @@ def _check_host_reachable(uri: str, timeout_sec: float = 1.5) -> Tuple[bool, str
         result = s.connect_ex((host, port))
         s.close()
         if result == 0:
-            return True, "ok"
-        return False, f"Port {port} unreachable on {host}"
+            return True, "ok", uri
+
+        # DHCP auto-failover check for Dahua DVR between .197 and .198
+        alt_ip = None
+        if "192.168.18.197" in host:
+            alt_ip = "192.168.18.198"
+        elif "192.168.18.198" in host:
+            alt_ip = "192.168.18.197"
+
+        if alt_ip:
+            alt_uri = uri.replace(host, alt_ip)
+            try:
+                s_alt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s_alt.settimeout(1.0)
+                res_alt = s_alt.connect_ex((alt_ip, port))
+                s_alt.close()
+                if res_alt == 0:
+                    return True, "ok", alt_uri
+            except Exception:
+                pass
+
+        return False, f"Port {port} unreachable on {host}", uri
     except Exception as e:
-        return False, f"Network check failed: {e}"
+        return False, f"Network check failed: {e}", uri
 
 
 def list_system_cameras() -> List[Dict[str, Any]]:
@@ -213,8 +233,10 @@ class CameraSource:
         medium = _detect_connection_medium(source_type, uri)
 
         if source_type in ("http_mjpeg", "rtsp"):
-            reachable, reason = _check_host_reachable(clean_uri, timeout_sec=2.0)
-            if not reachable:
+            reachable, reason, resolved_uri = _check_host_reachable(clean_uri, timeout_sec=2.0)
+            if reachable:
+                clean_uri = resolved_uri
+            else:
                 with self._lock:
                     self.health = CameraHealth(
                         source_type=source_type,
@@ -310,7 +332,7 @@ class CameraSource:
                     if not cap.isOpened():
                         cap = cv2.VideoCapture(dev_idx)
                 else:
-                    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;5000000"
+                    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|fflags;nobuffer|max_delay;500000"
                     cap = cv2.VideoCapture(uri)
 
                 if not cap or not cap.isOpened():
@@ -354,6 +376,11 @@ class CameraSource:
                     consecutive_failures = 0
                     now = time.time()
 
+                    # Auto-expand Dahua 1080N (960x1080) anamorphic half-width stream to proper 16:9
+                    h, w = frame.shape[:2]
+                    if w == 960 and h == 1080:
+                        frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+
                     # Apply orientation transform
                     transformed = _apply_orientation(frame)
                     self.buffer.update(transformed)
@@ -391,6 +418,17 @@ class CameraManager:
 
     def __init__(self):
         self.camera = CameraSource()
+        default_source = os.getenv("CAMERA_DEFAULT_SOURCE", "rtsp").lower()
+        default_rtsp = os.getenv(
+            "DEFAULT_RTSP_URI",
+            "rtsp://admin:admin1234@192.168.18.198:554/cam/realmonitor?channel=2&subtype=0",
+        )
+        if default_source == "rtsp" and default_rtsp:
+            self.camera.connect(
+                source_type="rtsp",
+                uri=default_rtsp,
+                fps_target=int(os.getenv("STREAM_FPS", "25")),
+            )
 
     def get_status(self) -> Dict[str, Any]:
         return {
