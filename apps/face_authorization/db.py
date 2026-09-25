@@ -145,10 +145,40 @@ class DatabaseManager:
             self._qdrant_client = client
             self._qdrant_available = True
             logger.info(f"Connected to Qdrant at {self.qdrant_url} (collection: {QDRANT_COLLECTION}, dim: {VECTOR_DIM})")
+            self._sync_sqlite_to_qdrant()
         except Exception as e:
             self._qdrant_available = False
             self._qdrant_client = None
             logger.warning(f"Qdrant unavailable at {self.qdrant_url} ({e}). Using embedded SQLite+NumPy vector search.")
+
+    def _sync_sqlite_to_qdrant(self) -> None:
+        """Ensure all stored 512-dim embeddings in SQLite are present in Qdrant collection."""
+        if not self._qdrant_available or self._qdrant_client is None:
+            return
+        try:
+            from qdrant_client.http import models
+            with self._get_connection() as conn:
+                rows = conn.execute("SELECT id, person_id, person_name, vector FROM embeddings WHERE dim = ?;", (VECTOR_DIM,)).fetchall()
+            if not rows:
+                return
+            points = []
+            for r in rows:
+                v = _blob_to_vector(r["vector"])
+                points.append(
+                    models.PointStruct(
+                        id=r["id"],
+                        vector=v.tolist(),
+                        payload={"person_id": r["person_id"], "name": r["person_name"]},
+                    )
+                )
+            if points:
+                self._qdrant_client.upsert(
+                    collection_name=QDRANT_COLLECTION,
+                    points=points,
+                )
+                logger.info(f"Synchronized {len(points)} embeddings from SQLite to Qdrant.")
+        except Exception as e:
+            logger.warning(f"Failed syncing SQLite embeddings to Qdrant: {e}")
 
     def _migrate_legacy_json(self) -> None:
         """Auto-import embeddings from old embeddings.json if present."""
@@ -261,11 +291,14 @@ class DatabaseManager:
     def delete_person(self, name: str) -> bool:
         """Delete person and associated embeddings from DB and Qdrant."""
         with self._lock:
+            emb_ids = []
             with self._get_connection() as conn:
                 row = conn.execute("SELECT id FROM persons WHERE name = ?;", (name,)).fetchone()
                 if not row:
                     return False
                 person_id = row["id"]
+                emb_rows = conn.execute("SELECT id FROM embeddings WHERE person_id = ?;", (person_id,)).fetchall()
+                emb_ids = [str(r["id"]) for r in emb_rows]
                 conn.execute("DELETE FROM embeddings WHERE person_id = ?;", (person_id,))
                 conn.execute("DELETE FROM persons WHERE id = ?;", (person_id,))
                 conn.commit()
@@ -273,6 +306,11 @@ class DatabaseManager:
             if self._qdrant_available and self._qdrant_client is not None:
                 try:
                     from qdrant_client.http import models
+                    if emb_ids:
+                        self._qdrant_client.delete(
+                            collection_name=QDRANT_COLLECTION,
+                            points_selector=models.PointIdsList(points=emb_ids),
+                        )
                     self._qdrant_client.delete(
                         collection_name=QDRANT_COLLECTION,
                         points_selector=models.FilterSelector(
@@ -318,15 +356,29 @@ class DatabaseManager:
                 return row["photo_path"]
         return None
 
-    def get_all_embeddings_matrix(self) -> Tuple[List[str], np.ndarray]:
+    def get_all_embeddings_matrix(self, target_dim: Optional[int] = None) -> Tuple[List[str], np.ndarray]:
         """Return (names_list, embeddings_matrix) for local vector search."""
         with self._get_connection() as conn:
-            rows = conn.execute("SELECT person_name, vector FROM embeddings;").fetchall()
+            if target_dim is not None:
+                rows = conn.execute("SELECT person_name, vector FROM embeddings WHERE dim = ?;", (target_dim,)).fetchall()
+            else:
+                rows = conn.execute("SELECT person_name, vector FROM embeddings;").fetchall()
             if not rows:
                 return [], np.empty((0, 0), dtype=np.float32)
 
-            names = [r["person_name"] for r in rows]
-            vectors = [_blob_to_vector(r["vector"]) for r in rows]
+            names = []
+            vectors = []
+            first_dim = target_dim
+            for r in rows:
+                v = _blob_to_vector(r["vector"])
+                if first_dim is None:
+                    first_dim = len(v)
+                elif len(v) != first_dim:
+                    continue
+                names.append(r["person_name"])
+                vectors.append(v)
+            if not vectors:
+                return [], np.empty((0, 0), dtype=np.float32)
             matrix = np.vstack(vectors).astype(np.float32)
             return names, matrix
 

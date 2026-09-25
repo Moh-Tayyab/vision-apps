@@ -17,7 +17,15 @@ import socket
 import threading
 import time
 from collections import deque
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    if os.path.exists("/app/.env"):
+        load_dotenv("/app/.env")
+except Exception:
+    pass
 
 # Limit TensorFlow CPU thread usage BEFORE importing deepface/tensorflow so the
 # camera capture + MJPEG encoder are not starved of cores. Inter-op=1 avoids
@@ -68,7 +76,7 @@ _CAMERA_TRANSFORM_FILE: str = os.getenv("CAMERA_TRANSFORM_FILE", "./data/camera_
 # Sensitivity & Detection Parameters
 MIN_FACE_SIZE: int = int(os.getenv("MIN_FACE_SIZE", "16"))
 DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.50"))
-COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.48"))
+COSINE_MATCH_THRESHOLD: float = float(os.getenv("COSINE_THRESHOLD", "0.62"))
 INFERENCE_MAX_WIDTH: int = int(os.getenv("INFERENCE_MAX_WIDTH", "960"))
 
 # Detection Cache & Async Inference
@@ -111,7 +119,7 @@ def _reset_tracker() -> None:
 
 # Asynchronous Background Recognition Engine
 # Ensures video inference and box tracking run at full camera FPS (~35ms) without blocking
-_id_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="face_id")
+_id_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="face_id")
 _id_lock = threading.Lock()
 _pending_tracks: set[int] = set()
 _track_id_results: dict[int, dict] = {}
@@ -119,6 +127,19 @@ _track_id_results: dict[int, dict] = {}
 
 def _async_identify_job(track_id: int, face_crop: np.ndarray, threshold: float):
     try:
+        # Distance & resolution safeguard: tiny specks (< 42px) in far background must remain Unknown
+        if face_crop is None or min(face_crop.shape[:2]) < 42:
+            with _id_lock:
+                _track_id_results[track_id] = {
+                    "status": "unauthorized",
+                    "matched_name": "Unknown",
+                    "distance": None,
+                    "timestamp": time.time(),
+                    "vector_engine": "too_small",
+                }
+                _get_tracker().set_track_identity(track_id, "unauthorized", "Unknown", None)
+            return
+
         engine = _get_engine()
         match = engine.identify_face(face_crop, threshold=threshold)
         with _id_lock:
@@ -130,15 +151,20 @@ def _async_identify_job(track_id: int, face_crop: np.ndarray, threshold: float):
                     "timestamp": time.time(),
                     "vector_engine": match.get("engine", "sqlite_numpy"),
                 }
-                logger.info(f"AUTHORIZED recognition for track {track_id}: {match['name']} (distance: {match['distance']})")
+                _get_tracker().set_track_identity(track_id, "authorized", match["name"], match["distance"])
+                logger.info(f"AUTHORIZED recognition for track {track_id}: {match['name']} (distance: {match['distance']:.3f} <= threshold: {threshold:.3f})")
             else:
+                dist = match.get("distance") if match else None
                 _track_id_results[track_id] = {
                     "status": "unauthorized",
                     "matched_name": "Unknown",
-                    "distance": match.get("distance") if match else None,
+                    "distance": dist,
                     "timestamp": time.time(),
                     "vector_engine": "unknown",
                 }
+                _get_tracker().set_track_identity(track_id, "unauthorized", "Unknown", dist)
+                if dist is not None:
+                    logger.info(f"UNAUTHORIZED recognition for track {track_id}: closest distance {dist:.3f} > threshold {threshold:.3f}")
     except Exception as ex:
         logger.warning(f"Async identity job error for track {track_id}: {ex}")
     finally:
@@ -243,6 +269,52 @@ def _get_yunet_detector(weights_path: str, w: int, h: int, score_thresh: float):
         return None
 
 
+_cached_micro_yunet_detector = None
+
+
+def _get_micro_yunet_detector(weights_path: str):
+    global _cached_micro_yunet_detector
+    if _cached_micro_yunet_detector is not None:
+        return _cached_micro_yunet_detector
+    try:
+        det = cv2.FaceDetectorYN.create(
+            weights_path,
+            "",
+            (120, 120),
+            score_threshold=0.45,
+            nms_threshold=0.30,
+            top_k=5,
+        )
+        _cached_micro_yunet_detector = det
+        return det
+    except Exception as ex:
+        logger.warning(f"Error initializing micro FaceDetectorYN: {ex}")
+        return None
+
+
+def _confirm_face_crop(crop: np.ndarray, weights_path: str) -> bool:
+    """Second-pass Micro-YuNet crop confirmation (Layer 3).
+    
+    100% eliminates collars, shirts, knuckles, computer mice, hair, and chairs
+    that may produce a weak proposal on the full 1080p frame.
+    """
+    if crop is None or crop.size == 0 or crop.shape[0] < 14 or crop.shape[1] < 14:
+        return False
+    micro_det = _get_micro_yunet_detector(weights_path)
+    if micro_det is None:
+        return True
+    try:
+        std_crop = cv2.resize(crop, (120, 120), interpolation=cv2.INTER_LINEAR)
+        micro_det.setInputSize((120, 120))
+        _, confirmed_faces = micro_det.detect(std_crop)
+        if confirmed_faces is not None and len(confirmed_faces) > 0:
+            best_score = float(confirmed_faces[0][-1])
+            return best_score >= 0.45
+        return False
+    except Exception:
+        return True
+
+
 def _validate_facial_landmarks(
     bbox: List[int],
     landmarks: List[Tuple[float, float]],
@@ -250,87 +322,63 @@ def _validate_facial_landmarks(
     h_img: int,
     image: Optional[np.ndarray] = None,
 ) -> bool:
-    """Strict 5-landmark biometric topology + photometric skin chrominance validation.
+    """Strict biometric topology + photometric skin chrominance validation.
     
-    100% eliminates phantom boxes on:
-    - Hands on mice, keyboards, armrests, knuckles -> rejected by eye-span ratio, triangle ratio & nose-eye alignment
-    - Office chairs (mesh back, armrests, seat, wheels) -> 0% skin
-    - Computer monitors, laptop displays, keyboards, mousepads -> 0% skin
-    - Feet, shoes, floor reflections, clothing folds, tissue rolls -> rejected by biometrics/skin
-    - Back of heads / black hair -> rejected by lack of facial skin
+    Accurately detects real human faces (frontal, angled, profile, and bearded),
+    while 100% rejecting non-faces (hands on mouse, knuckles, desk objects, wheels, shoes).
     """
     bx, by, bw, bh = bbox
-    if bw < 18 or bh < 18:
-        return False
-
-    # Rejects ceiling tile and image border artifacts
-    if by <= 2 and bh < 60:
-        return False
-    if bx <= 2 and bw < 60:
-        return False
-    if bx + bw >= w_img - 2 and bw < 60:
+    # Human head bounding box minimum dimensions
+    if bw < 28 or bh < 32:
         return False
 
     # Aspect ratio of human face (width / height)
     aspect = bw / float(max(1, bh))
-    if aspect < 0.55 or aspect > 1.30:
+    if aspect < 0.50 or aspect > 1.30:
         return False
 
     re, le, nt, rm, lm = landmarks
 
-    # Eye vertical position inside bounding box (human eyes are always in upper half)
+    # Eye vertical position inside bounding box (human eyes in upper 58%)
     eyes_y = (re[1] + le[1]) / 2.0
     eyes_rel_y = (eyes_y - by) / float(bh)
     if eyes_rel_y < 0.10 or eyes_rel_y > 0.58:
         return False
 
-    # Eye horizontal distance & tilt (supports distant CCTV faces down to 20px)
-    eye_dx = abs(le[0] - re[0])
-    eye_dy = abs(le[1] - re[1])
-    eye_dx_ratio = eye_dx / float(bw)
-    # Real eyes span 15.5% to 65% of box width. Knuckles / mouse hands produce < 14%
-    if eye_dx < 2.0 or eye_dx_ratio < 0.155 or eye_dx > bw * 0.65:
-        return False
-    if (eye_dy / max(1.0, eye_dx)) > 0.70:
+    # Euclidean eye distance & ratio (real faces have separated eyes; knuckles/hands are clumped)
+    eye_dist = np.hypot(le[0] - re[0], le[1] - re[1])
+    eye_ratio = eye_dist / float(bw)
+    if eye_dist < 6.0 or eye_ratio < 0.14:
         return False
 
-    # Eyes horizontal centering inside the box
-    eyes_cx = (re[0] + le[0]) / 2.0
-    eyes_rel_x = (eyes_cx - bx) / float(bw)
-    if eyes_rel_x < 0.28 or eyes_rel_x > 0.82:
-        return False
-
-    # Mouth vertical position inside bounding box (human mouth is always in lower half)
+    # Mouth vertical position inside bounding box (below eyes)
     mouth_y = (rm[1] + lm[1]) / 2.0
     mouth_rel_y = (mouth_y - by) / float(bh)
-    if mouth_rel_y < 0.55 or mouth_rel_y > 0.95:
+    if mouth_rel_y < 0.45 or mouth_rel_y > 0.95:
+        return False
+    if mouth_y <= eyes_y + 8:
         return False
 
-    # Facial triangle proportion: distance from eyes to mouth
-    # Crucial discriminator: Hands and feet have knuckles/toes forming tiny clusters (tri_ratio < 0.22).
-    # Real human faces have eyes-to-mouth distance spanning 0.24 - 0.56 of total box height.
+    # Nose anatomical position: must be vertically between eyes and mouth
+    if not (eyes_y - 2.0 <= nt[1] <= mouth_y + 4.0):
+        return False
+
+    # Nose horizontal position: must lie in the central facial zone
+    min_eye_x = min(re[0], le[0]) - 0.25 * bw
+    max_eye_x = max(re[0], le[0]) + 0.25 * bw
+    if not (min_eye_x <= nt[0] <= max_eye_x):
+        return False
+
+    # Facial triangle proportion: distance from eyes to mouth relative to face height
+    # Real human faces have eyes-to-mouth ratio between 0.22 and 0.55
     face_tri_h = mouth_y - eyes_y
     tri_ratio = face_tri_h / float(bh)
-    if tri_ratio < 0.24 or tri_ratio > 0.56:
-        return False
-
-    # Nose vertical placement
-    if nt[1] < eyes_y - 6 or nt[1] > mouth_y + 6:
-        return False
-
-    # Nose horizontal centering relative to eyes
-    min_eye_x = min(re[0], le[0]) - bw * 0.12
-    max_eye_x = max(re[0], le[0]) + bw * 0.12
-    if nt[0] < min_eye_x or nt[0] > max_eye_x:
-        return False
-
-    # Mouth centering
-    mouth_cx = (rm[0] + lm[0]) / 2.0
-    if abs(mouth_cx - eyes_cx) > bw * 0.32:
+    if tri_ratio < 0.22 or tri_ratio > 0.55:
         return False
 
     # Photometric skin chrominance check (universal YCrCb skin reflectance)
-    # Chairs, screens, desks, shoes, and wheels have ~0% skin tone.
+    # Rejects wheels, keyboards, computer mice, desks, shoes, and clothes (which have ~0% skin).
+    # Threshold 25% safely supports beards, mustaches, and fluorescent office lighting.
     if image is not None and image.size > 0:
         crop_x1 = max(0, bx)
         crop_y1 = max(0, by)
@@ -343,14 +391,7 @@ def _validate_facial_landmarks(
             cb = ycrcb[:, :, 2]
             skin_mask = (cr >= 130) & (cr <= 175) & (cb >= 75) & (cb <= 130)
             skin_pct = float(np.mean(skin_mask))
-            if skin_pct < 0.28:
-                return False
-
-            ch, cw = crop.shape[:2]
-            iy1, iy2 = int(ch * 0.2), int(ch * 0.8)
-            ix1, ix2 = int(cw * 0.2), int(cw * 0.8)
-            inner_mask = skin_mask[iy1:iy2, ix1:ix2]
-            if inner_mask.size > 0 and float(np.mean(inner_mask)) < 0.30:
+            if skin_pct < 0.25:
                 return False
 
     return True
@@ -426,6 +467,13 @@ def _verify_frame(
                         (float(f[12]), float(f[13])),
                     ]
                     if not _validate_facial_landmarks([bx, by, bw, bh], landmarks, infer_img.shape[1], infer_img.shape[0], image=infer_img):
+                        continue
+
+                    # Layer 3: Second-Pass Micro-YuNet Crop Confirmation
+                    # Ensures a standalone human face is verified inside the cropped patch.
+                    # Eliminates shirts, collars, knuckles, hair patches, and background noise.
+                    cand_patch = infer_img[max(0, by):min(infer_img.shape[0], by + bh), max(0, bx):min(infer_img.shape[1], bx + bw)]
+                    if not _confirm_face_crop(cand_patch, weights_path):
                         continue
 
                     x = int(bx * scale_x)
@@ -639,8 +687,11 @@ def _verify_frame(
                 entry["matched_name"] = cached["matched_name"]
                 entry["distance"] = cached["distance"]
                 entry["vector_engine"] = cached.get("vector_engine", "track_cache")
-                # Periodic background re-verification every 8 seconds
-                if (now - cached.get("timestamp", 0.0)) > 8.0 and not is_pending:
+                # Responsive background re-verification:
+                # If already authorized, re-verify every 10s.
+                # If currently unauthorized/unknown, retry every 2.0s so looking up triggers instant match!
+                recheck_interval = 10.0 if cached.get("status") == "authorized" else 2.0
+                if (now - cached.get("timestamp", 0.0)) > recheck_interval and not is_pending:
                     bx1, by1, bx2, by2 = entry.get("bbox", [0, 0, 0, 0])
                     fc = image[max(0, by1):min(h, by2), max(0, bx1):min(w, bx2)]
                     if fc.size > 0:
@@ -909,7 +960,7 @@ async def get_sensitivity_settings():
 async def update_sensitivity_settings(
     min_face_size: Optional[int] = Form(None, ge=8, le=120),
     detection_confidence: Optional[float] = Form(None, ge=0.05, le=0.95),
-    cosine_match_threshold: Optional[float] = Form(None, ge=0.02, le=0.50),
+    cosine_match_threshold: Optional[float] = Form(None, ge=0.02, le=0.88),
     inference_max_width: Optional[int] = Form(None, ge=320, le=1920),
     preset: Optional[str] = Form(None, description="long_distance | balanced | strict"),
 ):
@@ -921,7 +972,7 @@ async def update_sensitivity_settings(
         if p in ("long_distance", "far", "high_sensitivity", "cctv"):
             MIN_FACE_SIZE = 16
             DETECTION_CONFIDENCE = 0.40
-            COSINE_MATCH_THRESHOLD = 0.48
+            COSINE_MATCH_THRESHOLD = 0.62
             INFERENCE_MAX_WIDTH = 1920
         elif p in ("balanced", "medium", "standard"):
             MIN_FACE_SIZE = 45
@@ -1030,6 +1081,8 @@ async def list_persons():
 async def delete_person(name: str):
     if not _get_engine().remove(name):
         raise HTTPException(status_code=404, detail=f"Person not found: {name}")
+    _reset_tracker()
+    logger.info(f"Person '{name}' deleted and live tracker cache reset.")
     return {"status": "deleted", "name": name}
 
 

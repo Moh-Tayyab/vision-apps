@@ -195,7 +195,8 @@ class FaceEngine:
         # Hard reject ceiling: below this, embeddings are too degraded (tiny/
         # distant faces) to trust the nearest neighbor. Prevents wrongly
         # NAMING the closest enrolled person when the match is unreliable.
-        reject_ceiling = float(os.getenv("REJECT_CEILING", "0.58"))
+        reject_ceiling = float(os.getenv("REJECT_CEILING", "0.72"))
+        reject_ceiling = max(reject_ceiling, eff_threshold + 0.05)
         match = self.db.search_face(query, threshold=eff_threshold)
         if match is None:
             return None

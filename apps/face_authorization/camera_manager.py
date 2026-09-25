@@ -317,19 +317,18 @@ class CameraSource:
                 if self.source_type in ("rtsp", "http_mjpeg"):
                     reachable, reason = _check_host_reachable(uri_str, timeout_sec=1.5)
                     if not reachable:
-                        # Auto-failover check for Dahua DVR DHCP IP change between .197 and .198
-                        alt_ip = None
-                        if "192.168.18.197" in uri_str:
-                            alt_ip = "192.168.18.198"
-                        elif "192.168.18.198" in uri_str:
-                            alt_ip = "192.168.18.197"
-                        if alt_ip:
-                            alt_uri = uri_str.replace("192.168.18.197", alt_ip).replace("192.168.18.198", alt_ip)
-                            r_alt, _ = _check_host_reachable(alt_uri, timeout_sec=1.0)
+                        # Auto-failover check for CCTV IP change using configured failover IPs in .env
+                        import re
+                        failover_env = os.getenv("CCTV_FAILOVER_IPS", "")
+                        known_ips = [ip.strip() for ip in failover_env.split(",") if ip.strip()]
+                        for alt_ip in known_ips:
+                            alt_uri = re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', alt_ip, uri_str, count=1)
+                            r_alt, _ = _check_host_reachable(alt_uri, timeout_sec=0.5)
                             if r_alt:
                                 uri_str = alt_uri
                                 self.source_uri = alt_uri
                                 reachable = True
+                                break
                         if not reachable:
                             with self._lock:
                                 self._last_error = f"Unreachable: {reason}. Ensure camera is active."
@@ -462,10 +461,11 @@ class CameraManager:
                 dev_idx = os.getenv("USB_DEVICE_INDEX", "0")
                 self.camera = CameraSource(source_type="usb", source_uri=dev_idx, target_fps=fps)
                 self.camera.start()
-            elif default_source == "rtsp":
-                rtsp_uri = os.getenv("DEFAULT_RTSP_URI", "rtsp://admin:admin1234@192.168.18.198:554/cam/realmonitor?channel=2&subtype=0")
-                self.camera = CameraSource(source_type="http_mjpeg", source_uri=rtsp_uri, target_fps=fps)
-                self.camera.start()
+            elif default_source in ("rtsp", "cctv"):
+                rtsp_uri = os.getenv("DEFAULT_CAMERA_RTSP") or os.getenv("DEFAULT_RTSP_URI", "")
+                if rtsp_uri:
+                    self.camera = CameraSource(source_type="rtsp", source_uri=rtsp_uri, target_fps=fps)
+                    self.camera.start()
             else:
                 self.camera = CameraSource(source_type="mobile", source_uri="browser", target_fps=fps)
 
