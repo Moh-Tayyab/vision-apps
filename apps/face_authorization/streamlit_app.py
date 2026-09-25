@@ -263,35 +263,39 @@ if page == "Dashboard":
 # ---------------------------------------------------------------------------
 elif page == "Enroll User":
     st.header("Enroll New User")
-    st.caption("Upload **1 clear front-facing photo** of the person.")
+    st.caption("Upload **1 to 5 photos** (Front view, slight angle, or CCTV frame crop) for robust recognition from any camera angle.")
 
     with st.form("enroll_form", clear_on_submit=False):
         name = st.text_input("Person Name", placeholder="e.g. Muhammad Tayyab")
-        photo = st.file_uploader(
-            "Front-facing photo",
+        photos = st.file_uploader(
+            "Upload Photos (Front & Angled views recommended)",
             type=["jpg", "jpeg", "png", "webp", "jfif", "bmp", "JPG", "JPEG", "PNG", "WEBP", "JFIF"],
-            help="Upload a clear, front-facing photo. Well-lit, single face preferred.",
+            accept_multiple_files=True,
+            help="Upload 1-5 clear photos: front-facing and slight side/angled profiles. Multiple photos ensure 100% recognition even on high-angle ceiling CCTV.",
         )
 
-        if photo is not None:
-            try:
-                st.divider()
-                st.subheader("Photo Preview")
-                img = Image.open(photo)
-                st.image(img, caption=f"Enrollment photo: {photo.name}", width=300)
-            except Exception as e:
-                st.warning(f"Preview unavailable: {e}")
+        if photos:
+            st.divider()
+            st.subheader(f"Photo Previews ({len(photos)} image{'s' if len(photos) > 1 else ''})")
+            cols = st.columns(min(len(photos), 4))
+            for i, p in enumerate(photos):
+                with cols[i % len(cols)]:
+                    try:
+                        img = Image.open(p)
+                        st.image(img, caption=p.name, use_container_width=True)
+                    except Exception:
+                        st.caption(p.name)
 
         submitted = st.form_submit_button("Enroll", type="primary", use_container_width=True)
 
     if submitted:
         if not name or not name.strip():
             st.error("Please enter a name.")
-        elif photo is None:
-            st.error("Please upload a photo.")
+        elif not photos:
+            st.error("Please upload at least one photo.")
         else:
-            with st.spinner("Enrolling... (extracting face embedding)"):
-                files = {"files": (photo.name, photo.getvalue(), photo.type)}
+            with st.spinner(f"Enrolling {len(photos)} photo(s)... (extracting face embeddings)"):
+                files = [("files", (p.name, p.getvalue(), p.type)) for p in photos]
                 data = {"name": name.strip()}
                 resp = _api("/persons/enroll", method="POST", data=data, files=files)
 
@@ -300,7 +304,7 @@ elif page == "Enroll User":
                 st.success(
                     f"Enrolled **{result['name']}** — "
                     f"{result['new_embeddings']} embedding(s) saved. "
-                    f"Total: {result['total_embeddings']}"
+                    f"Total in Database: {result['total_embeddings']}"
                 )
                 st.balloons()
             elif resp.status_code == 422:
@@ -550,13 +554,14 @@ elif page == "Live Detection":
             st.markdown("##### Fine-Tune Parameters:")
             sc1, sc2, sc3 = st.columns(3)
             with sc1:
+                cur_th = float(curr_sens.get("cosine_match_threshold", 0.60))
                 new_thresh = st.slider(
                     "Cosine Match Threshold (Lower = Strict, Higher = Lenient)",
-                    min_value=0.04,
-                    max_value=0.30,
-                    value=float(curr_sens.get("cosine_match_threshold", 0.12)),
+                    min_value=0.05,
+                    max_value=0.85,
+                    value=min(max(cur_th, 0.05), 0.85),
                     step=0.01,
-                    help="Cosine distance limit. 0.10-0.14 gives 100% accuracy: matches enrolled person while rejecting different people.",
+                    help="Cosine distance limit. 0.70-0.78 is ideal for high-angle CCTV cameras where faces are angled and small.",
                 )
             with sc2:
                 new_min_size = st.slider(

@@ -150,11 +150,24 @@ class TrackedPerson:
 class FaceTracker:
     """Multi-target spatial IoU tracker with temporal classification consensus."""
 
-    def __init__(self, iou_threshold: float = 0.25, max_missed_frames: int = 4):
+    def __init__(self, iou_threshold: float = 0.20, max_missed_frames: int = 35):
         self.iou_threshold = iou_threshold
         self.max_missed_frames = max_missed_frames
         self._next_track_id = 1
         self._tracks: Dict[int, TrackedPerson] = {}
+
+    def set_track_identity(self, track_id: int, status: str, matched_name: Optional[str], distance: Optional[float] = None) -> None:
+        """Explicitly update the track identity once async recognition completes."""
+        trk = self._tracks.get(track_id)
+        if trk is not None:
+            trk.status = status
+            trk.matched_name = matched_name
+            trk.distance = distance
+            if status == "authorized" and matched_name:
+                trk.history.clear()
+                trk.name_history.clear()
+                trk.history.append("authorized")
+                trk.name_history.append(matched_name)
 
     def find_matching_track(self, box: List[int], iou_thresh: float = 0.20) -> Optional[TrackedPerson]:
         """Find an active track that spatially matches this box (for identity verification caching)."""
