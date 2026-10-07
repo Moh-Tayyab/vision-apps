@@ -63,3 +63,10 @@ docker-compose.override.yml
 AGENTS.md
 .agents
 .agent/
+# ML weights/datasets — keep in Releases, never commit new ones (*.pt kept for existing demos)
+*.zip
+*.onnx
+dataset/
+training-data/
+*.mp4
+!sample_*.mp4
