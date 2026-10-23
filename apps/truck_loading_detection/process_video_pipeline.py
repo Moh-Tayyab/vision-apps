@@ -64,7 +64,7 @@ def process_video_file(
     direction: Optional[str] = None,
     conf: float = 0.18,
     iou: float = 0.45,
-    imgsz: int = 384,
+    imgsz: int = 640,
     frame_stride: int = 1,
     max_dimension: int = 720,
     model_path: Optional[str] = None,
@@ -341,6 +341,7 @@ if __name__ == "__main__":
     parser.add_argument("--line-ratio", type=float, default=None, help="Virtual line X ratio (0.0 - 1.0)")
     parser.add_argument("--direction", type=str, default=None, help="Loading direction ('left_to_right' or 'right_to_left')")
     parser.add_argument("--stride", type=int, default=1, help="Frame stride")
+    parser.add_argument("--imgsz", type=int, default=640, help="YOLO inference resolution (640 for door-lage CCTV)")
     args = parser.parse_args()
 
     if args.all or (args.input is None):
@@ -352,4 +353,5 @@ if __name__ == "__main__":
             line_x_ratio=args.line_ratio,
             direction=args.direction,
             frame_stride=args.stride,
+            imgsz=args.imgsz,
         )
