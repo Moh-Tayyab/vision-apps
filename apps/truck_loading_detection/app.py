@@ -19,6 +19,8 @@ from ultralytics import YOLO
 from counter_engine import TripwireCounter
 from visualizer import LoadingVisualizer
 from process_video_pipeline import process_video_file
+from multi_angle_pipeline import MultiAnglePipeline, CameraSpec
+
 
 # ---------------------------------------------------------------------------
 # Structured Logging
@@ -40,14 +42,22 @@ WORKERS = int(os.environ.get("WORKERS", 1))
 TORCH_THREADS = int(os.environ.get("TORCH_THREADS", 4))
 CONF = float(os.environ.get("CONF_THRESHOLD", 0.24))
 IOU = float(os.environ.get("IOU_THRESHOLD", 0.45))
-IMG_SIZE = int(os.environ.get("IMG_SIZE", 416))
+IMG_SIZE = int(os.environ.get("IMG_SIZE", 640))
 FRAME_STRIDE = int(os.environ.get("FRAME_STRIDE", 2))
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 500))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", 70))
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv"}
 
+# RTSP / live camera resilience (warehouse CCTV)
+RTSP_TRANSPORT = os.environ.get("RTSP_TRANSPORT", "tcp")
+RTSP_STIMEOUT_MS = int(os.environ.get("RTSP_STIMEOUT_MS", 5000000))  # 5 s
+MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", 0))  # 0 = unlimited
+RECONNECT_BACKOFF_BASE = float(os.environ.get("RECONNECT_BACKOFF_BASE", 1.0))
+RECONNECT_BACKOFF_CAP = float(os.environ.get("RECONNECT_BACKOFF_CAP", 10.0))
+FRAME_DROP_MAX_CONSECUTIVE = int(os.environ.get("FRAME_DROP_MAX_CONSECUTIVE", 30))
+
 # Default video source (RTSP URL or file path) via env
-DEFAULT_SOURCE = os.environ.get("VIDEO_SOURCE", "")
+DEFAULT_SOURCE = os.environ.get("VIDEO_SOURCE", "output_videos/multi_angle_3angle_v2.mp4")
 
 torch.set_num_threads(TORCH_THREADS)
 
@@ -150,6 +160,10 @@ class StreamState:
         self.current_frame_jpg = None
         self.last_tracked_objects = []
 
+        self.is_multi_angle = False
+        self.multi_angle_report = None
+        self.live_cameras = {}
+
         self.start_time = datetime.now(timezone.utc)
 
         if self.source:
@@ -179,10 +193,44 @@ class StreamState:
                 if os.path.exists(candidate):
                     src = candidate
 
+        # Detect if source is a 3-angle multi-view composite video or has a report JSON
+        self.is_multi_angle = False
+        self.multi_angle_report = None
+        if isinstance(src, str):
+            src_str = str(src).lower()
+            if any(k in src_str for k in ["multi_angle", "3view", "3angle", "fused"]):
+                self.is_multi_angle = True
+
+            # Attempt to locate report JSON
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            abs_src = os.path.abspath(os.path.join(app_dir, src)) if not os.path.isabs(str(src)) else os.path.abspath(str(src))
+            src_dir = os.path.dirname(abs_src)
+            src_base = os.path.basename(abs_src)
+
+            cands = [
+                os.path.join(src_dir, src_base.rsplit(".", 1)[0] + "_report.json"),
+                os.path.join(app_dir, "output_videos", src_base.rsplit(".", 1)[0] + "_report.json"),
+                os.path.join(app_dir, "output_videos", "multi_angle_3angle_v2_report.json"),
+                os.path.join(app_dir, "output_videos", "new_3angle_report.json"),
+                os.path.join(app_dir, "output_videos", "multi_angle_3view_report.json"),
+            ]
+            for c in cands:
+                if os.path.exists(c):
+                    try:
+                        with open(c, "r") as fh:
+                            self.multi_angle_report = json.load(fh)
+                        self.is_multi_angle = True
+                        logger.info("Associated multi-angle report loaded: %s", c)
+                        break
+                    except Exception as e:
+                        logger.warning("Failed to load report %s: %s", c, e)
+
         try:
             # Set RTSP transport timeout for live camera streams
             if isinstance(src, str) and src.startswith("rtsp://"):
-                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                    f"rtsp_transport;{RTSP_TRANSPORT}|stimeout;{RTSP_STIMEOUT_MS}"
+                )
 
             self.cap = cv2.VideoCapture(src)
             if self.cap.isOpened():
@@ -193,8 +241,9 @@ class StreamState:
                     self.fps = 25.0
 
                 max_dim = max(raw_w, raw_h)
-                if max_dim > 720:
-                    scale = 720.0 / max_dim
+                target_limit = 1280 if self.is_multi_angle else 720
+                if max_dim > target_limit:
+                    scale = float(target_limit) / max_dim
                     self.video_width = int(raw_w * scale)
                     self.video_height = int(raw_h * scale)
                     self.scale_factor = scale
@@ -292,7 +341,12 @@ def processing_loop():
                 cap_is_open = state.cap is not None and state.cap.isOpened()
                 if not cap_is_open:
                     now = time.time()
-                    backoff = min(10.0, 1.0 + (state.reconnect_attempts * 1.5))
+                    backoff = min(RECONNECT_BACKOFF_CAP, RECONNECT_BACKOFF_BASE + (state.reconnect_attempts * 1.5))
+                    if MAX_RECONNECT_ATTEMPTS > 0 and state.reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+                        state.connection_status = "error"
+                        logger.error("Max reconnect attempts (%d) reached for %s. Giving up.", MAX_RECONNECT_ATTEMPTS, state.source)
+                        time.sleep(1.0)
+                        continue
                     if now - state.last_reconnect_time >= backoff:
                         state.connection_status = "reconnecting"
                         state.reconnect_attempts += 1
@@ -307,16 +361,24 @@ def processing_loop():
                 loop_video = state.loop_video
 
                 if not ret:
+                    state.consecutive_frame_drops = getattr(state, "consecutive_frame_drops", 0) + 1
                     is_live_stream = isinstance(source, int) or (
                         isinstance(source, str) and (source.startswith("rtsp://") or source.startswith("http"))
                     )
                     if is_live_stream:
-                        logger.warning("Live stream frame drop. Reconnecting...")
+                        if state.consecutive_frame_drops >= FRAME_DROP_MAX_CONSECUTIVE:
+                            logger.warning("Too many consecutive frame drops (%d). Forcing reconnect.", state.consecutive_frame_drops)
+                            state.connection_status = "reconnecting"
+                            state.consecutive_frame_drops = 0
+                            if state.cap:
+                                state.cap.release()
+                            state.cap = None
+                            state.last_reconnect_time = time.time()
+                        else:
+                            logger.warning("Live stream frame drop (%d/%d). Waiting...",
+                                           state.consecutive_frame_drops, FRAME_DROP_MAX_CONSECUTIVE)
                         state.connection_status = "reconnecting"
-                        if state.cap:
-                            state.cap.release()
-                        state.cap = None
-                        state.last_reconnect_time = time.time()
+                        time.sleep(0.05)
                         continue
                     elif loop_video:
                         if state.cap:
@@ -330,6 +392,7 @@ def processing_loop():
 
                 state.connection_status = "connected"
                 state.reconnect_attempts = 0
+                state.consecutive_frame_drops = 0
                 state.frame_idx += 1
                 cur_frame_idx = state.frame_idx
                 conf_val = state.conf
@@ -343,6 +406,22 @@ def processing_loop():
 
             if scale_fac != 1.0:
                 frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+
+            if state.is_multi_angle:
+                # Frame is a synchronized 3-angle multi-view composite already rendered with HUD and bounding boxes!
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+                _, buffer = cv2.imencode(".jpg", frame, encode_param)
+                with lock:
+                    state.current_frame_jpg = buffer.tobytes()
+                    t_end = time.time()
+                    frame_dt = max(t_end - t_start, 1e-4)
+                    state.live_fps = 0.9 * state.live_fps + 0.1 * (1.0 / frame_dt)
+                    target_fps = min(30.0, max(15.0, state.fps))
+                target_dt = 1.0 / max(target_fps, 10.0)
+                sleep_dt = target_dt - (time.time() - t_start)
+                if sleep_dt > 0:
+                    time.sleep(sleep_dt)
+                continue
 
             run_detection = (cur_frame_idx % stride_val == 0) or (len(last_objs) == 0)
 
@@ -463,15 +542,23 @@ def index():
 @app.route("/health")
 def health_check():
     uptime = (datetime.now(timezone.utc) - state.start_time).total_seconds()
+    is_healthy = state.connection_status != "error"
     return jsonify({
-        "status": "healthy" if state.connection_status != "error" else "degraded",
+        "status": "healthy" if is_healthy else "degraded",
         "service": "truck-loading-detection",
         "connection_status": state.connection_status,
         "source": state.source or None,
         "model": state.model_name,
+        "imgsz": state.img_size,
+        "conf": state.conf,
         "uptime_seconds": round(uptime, 1),
         "net_count": state.counter.net_count,
+        "loaded_cartons": state.counter.total_in,
+        "returned_cartons": state.counter.total_out,
         "fps": round(state.live_fps, 1),
+        "reconnect_attempts": state.reconnect_attempts,
+        "consecutive_frame_drops": getattr(state, "consecutive_frame_drops", 0),
+        "active_tracks": state.active_count,
     })
 
 
@@ -488,10 +575,59 @@ def video_feed():
 @app.route("/api/stats")
 def api_stats():
     with lock:
+        if state.is_multi_angle and state.multi_angle_report:
+            res = state.multi_angle_report.get("result", {})
+            events = res.get("events", [])
+            fps_val = max(state.fps, 1.0)
+            current_sec = state.frame_idx / fps_val
+
+            if events:
+                # Active events up to current playback frame/time
+                active_events = [
+                    ev for ev in events
+                    if (ev.get("frame_idx") is not None and ev["frame_idx"] <= state.frame_idx)
+                    or (ev.get("frame_idx") is None and ev.get("timestamp_sec", 0.0) <= current_sec)
+                ]
+                total_in = sum(ev.get("fused_cartons", 1) for ev in active_events if ev.get("direction", "IN") == "IN")
+                total_out = sum(ev.get("fused_cartons", 1) for ev in active_events if ev.get("direction") == "OUT")
+                net_cnt = total_in - total_out
+                trips_in = len(active_events)
+                recent_events = list(active_events)
+                recent_events.reverse()
+            else:
+                total_in = res.get("total_loaded_cartons", 0)
+                total_out = res.get("total_returned_cartons", 0)
+                net_cnt = res.get("net_cartons", 0)
+                trips_in = res.get("total_worker_trips", 0)
+                recent_events = []
+
+            breakdown = res.get("consensus_breakdown", {})
+            c_status = "THREE_CAMERA_VERIFIED" if breakdown.get("WIDTH_SAMPLED_3CAM", 0) > 0 or breakdown.get("THREE_CAMERA_VERIFIED", 0) > 0 else "DUAL_CAMERA_VERIFIED"
+            return jsonify({
+                "is_multi_angle": True,
+                "total_in": total_in,
+                "total_out": total_out,
+                "net_count": net_cnt,
+                "worker_trips_in": trips_in,
+                "worker_trips_out": 0,
+                "fps": round(state.live_fps, 1),
+                "active_count": 0,
+                "frame_idx": state.frame_idx,
+                "is_paused": state.is_paused,
+                "loop_video": state.loop_video,
+                "source": state.source,
+                "connection_status": state.connection_status,
+                "consensus_breakdown": breakdown,
+                "consensus_status": c_status,
+                "events": recent_events[:25],
+                "cameras": state.multi_angle_report.get("cameras", []),
+            })
+
         recent_events = list(state.counter.events)
         recent_events.reverse()
         recent_events = recent_events[:15]
         return jsonify({
+            "is_multi_angle": False,
             "total_in": state.counter.total_in,
             "total_out": state.counter.total_out,
             "net_count": state.counter.net_count,
@@ -588,7 +724,14 @@ def api_toggle_loop():
 def api_reset():
     with lock:
         state.counter.reset_counts()
-    return jsonify({"success": True})
+        if state.cap is not None:
+            ret = state.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            if not ret:
+                state.init_capture()
+        state.frame_idx = 0
+        state.active_count = 0
+        logger.info("Counts, frame index, and video playback reset to 0 by user")
+    return jsonify({"success": True, "frame_idx": 0, "net_count": 0})
 
 
 @app.route("/api/set_source", methods=["POST"])
@@ -778,6 +921,297 @@ def api_job_status(job_id):
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(job)
+
+
+# ---------------------------------------------------------------------------
+# 3-Angle Multi-View Pipeline Endpoints
+# ---------------------------------------------------------------------------
+multi_angle_jobs = {}
+
+
+@app.route("/api/3angle/available_videos")
+def api_3angle_available_videos():
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    rec_dir = os.path.join(app_dir, "recorded_video")
+    up_dir = app.config["UPLOAD_FOLDER"]
+
+    def list_vids(d):
+        if not os.path.exists(d):
+            return []
+        return sorted([
+            f for f in os.listdir(d)
+            if os.path.splitext(f)[1].lower() in ALLOWED_EXTENSIONS
+            and not f.endswith(".raw.mp4")
+        ])
+
+    rec_files = list_vids(rec_dir)
+    up_files = list_vids(up_dir)
+
+    top_candidates = [f for f in rec_files if any(k in f.lower() for k in ["top", "overhead"])]
+    side_candidates = [f for f in rec_files if "side" in f.lower()]
+    flank_candidates = [f for f in rec_files if "flank" in f.lower()]
+
+    def_top = "overhead_aligned.mp4" if "overhead_aligned.mp4" in rec_files else (top_candidates[0] if top_candidates else "")
+    def_side = "side_aligned.mp4" if "side_aligned.mp4" in rec_files else (side_candidates[0] if side_candidates else "")
+    def_flank = "flank_aligned.mp4" if "flank_aligned.mp4" in rec_files else (flank_candidates[0] if flank_candidates else "")
+
+    return jsonify({
+        "recorded_videos": rec_files,
+        "uploaded_videos": up_files,
+        "top_candidates": top_candidates,
+        "side_candidates": side_candidates,
+        "flank_candidates": flank_candidates,
+        "defaults": {
+            "top": def_top,
+            "side": def_side,
+            "flank": def_flank,
+        }
+    })
+
+
+@app.route("/api/3angle/upload", methods=["POST"])
+def api_3angle_upload():
+    slot = request.form.get("slot", "top").lower()
+    file = request.files.get("video") or request.files.get("file")
+    if not file or file.filename == "":
+        return jsonify({"error": "No file uploaded"}), 400
+
+    raw_name = file.filename
+    base, ext = os.path.splitext(raw_name)
+    ext = ext.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({"error": f"Only video files ({', '.join(ALLOWED_EXTENSIONS)}) are allowed"}), 400
+
+    safe_base = secure_filename(base) or f"video_{int(time.time())}"
+    filename = f"{slot}_{safe_base}{ext}"
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    file.save(filepath)
+
+    logger.info("3-Angle upload saved for slot [%s]: %s", slot, filename)
+    return jsonify({
+        "success": True,
+        "slot": slot,
+        "filename": filename,
+        "filepath": filepath,
+    })
+
+
+@app.route("/api/3angle/process", methods=["POST"])
+def api_3angle_process():
+    data = request.json or {}
+    v_top = data.get("video_top", "").strip()
+    v_side = data.get("video_side", "").strip()
+    v_flank = data.get("video_flank", "").strip()
+
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    rec_dir = os.path.join(app_dir, "recorded_video")
+    up_dir = app.config["UPLOAD_FOLDER"]
+
+    def resolve_video(v, default_name):
+        target = v or default_name
+        if not target:
+            return None
+        cands = [
+            target,
+            os.path.join(rec_dir, target),
+            os.path.join(up_dir, target),
+            os.path.join(app_dir, target),
+        ]
+        for c in cands:
+            if os.path.exists(c):
+                return os.path.abspath(c)
+        return None
+
+    path_top = resolve_video(v_top, "overhead_d3_aligned.mp4") or resolve_video(v_top, "overhead_aligned.mp4") or resolve_video("", "top_view.mp4")
+    path_side = resolve_video(v_side, "side_d3_aligned.mp4") or resolve_video(v_side, "side_aligned.mp4") or resolve_video("", "side_view.mp4")
+    path_flank = resolve_video(v_flank, "flank_d3_aligned.mp4") or resolve_video(v_flank, "flank_aligned.mp4") or resolve_video("", "flank_view.mp4")
+
+    if not path_top or not path_side or not path_flank:
+        missing = []
+        if not path_top: missing.append("Angle 1 (Top / Overhead)")
+        if not path_side: missing.append("Angle 2 (Side Profile)")
+        if not path_flank: missing.append("Angle 3 (Opposite Flank)")
+        return jsonify({"error": f"Missing videos: {', '.join(missing)}"}), 400
+
+    job_id = f"3angle_job_{int(time.time())}_{len(multi_angle_jobs)}"
+    multi_angle_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "processing",
+        "progress_pct": 5,
+        "phase": "Initializing 3-Angle Pipeline",
+        "videos": {
+            "top": os.path.basename(path_top),
+            "side": os.path.basename(path_side),
+            "flank": os.path.basename(path_flank),
+        },
+        "result": None,
+        "error": None,
+        "start_time": time.time(),
+    }
+
+    def _pipeline_worker(jid, p_top, p_side, p_flank):
+        try:
+            multi_angle_jobs[jid]["progress_pct"] = 15
+            multi_angle_jobs[jid]["phase"] = "Phase A: Analyzing 3 angles (YOLO + Carton Payload)"
+
+            specs = [
+                CameraSpec(
+                    camera_id="cam_top",
+                    video_path=p_top,
+                    role="width_sampler",
+                    angle_type="top_overhead",
+                    line_orientation="horizontal",
+                    line_pos_frac=0.45,
+                    direction="up_to_down",
+                    cooldown_frames=45,
+                    roi_mode="wide",
+                ),
+                CameraSpec(
+                    camera_id="cam_side",
+                    video_path=p_side,
+                    role="height",
+                    angle_type="side_profile",
+                    line_orientation="vertical",
+                    line_pos_frac=0.50,
+                    direction="left_to_right",
+                    cooldown_frames=45,
+                    roi_mode="column",
+                    slice_frac=0.3,
+                    count_directions=["IN"],
+                ),
+                CameraSpec(
+                    camera_id="cam_flank",
+                    video_path=p_flank,
+                    role="corroborator",
+                    angle_type="side_profile",
+                    line_orientation="vertical",
+                    line_pos_frac=0.70,
+                    direction="right_to_left",
+                    cooldown_frames=45,
+                    roi_mode="wide",
+                    count_directions=["IN"],
+                ),
+            ]
+
+            out_vid = os.path.join(OUTPUT_DIR, f"multi_angle_{jid}.mp4")
+            out_json = os.path.join(OUTPUT_DIR, f"multi_angle_{jid}_report.json")
+
+            pipeline = MultiAnglePipeline(
+                camera_specs=specs,
+                conf=0.22,
+                frame_stride=2,
+                pane_height=540,
+                time_window_sec=0.85,
+                use_cache=True,
+                hud_metric="count",
+                count_directions=["IN"],
+            )
+
+            pipeline.analyse()
+
+            multi_angle_jobs[jid]["progress_pct"] = 55
+            multi_angle_jobs[jid]["phase"] = "Phase B: Temporal Start-Offset Sequence Alignment"
+            pipeline.align()
+
+            multi_angle_jobs[jid]["progress_pct"] = 75
+            multi_angle_jobs[jid]["phase"] = "Phase C: 3-Angle Consensus & Synchronized Multi-View Rendering"
+            report = pipeline.render(
+                output_video_path=out_vid,
+                output_json_path=out_json,
+                title="Truck Loading 3-Angle Synchronized Monitor Feed",
+            )
+
+            multi_angle_jobs[jid]["progress_pct"] = 100
+            multi_angle_jobs[jid]["phase"] = "Completed"
+            multi_angle_jobs[jid]["status"] = "completed"
+            multi_angle_jobs[jid]["result"] = report
+            multi_angle_jobs[jid]["output_video"] = out_vid
+            multi_angle_jobs[jid]["output_json"] = out_json
+
+            # Auto-load into active stream state
+            with lock:
+                state.source = out_vid
+                state.multi_angle_report = report
+                state.is_multi_angle = True
+                state.init_capture()
+
+            logger.info("3-Angle Job [%s] completed successfully. Loaded cartons: %d",
+                        jid, report["result"]["total_loaded_cartons"])
+        except Exception as e:
+            logger.error("3-Angle Job [%s] failed: %s\n%s", jid, e, traceback.format_exc())
+            multi_angle_jobs[jid]["status"] = "failed"
+            multi_angle_jobs[jid]["error"] = str(e)
+
+    t = threading.Thread(target=_pipeline_worker, args=(job_id, path_top, path_side, path_flank), daemon=True)
+    t.start()
+
+    return jsonify({"success": True, "job_id": job_id, "status": "processing"})
+
+
+@app.route("/api/3angle/job_status/<job_id>")
+def api_3angle_job_status(job_id):
+    job = multi_angle_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
+
+
+@app.route("/api/3angle/load_sample", methods=["POST"])
+def api_3angle_load_sample():
+    """Instantly load the pre-verified 3-angle multi-view video take."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    # Try v2 (new shoot aligned) first, then v3 (d3), then original
+    sample_vid = os.path.join(app_dir, "output_videos", "multi_angle_3angle_v2.mp4")
+    sample_json = os.path.join(app_dir, "output_videos", "multi_angle_3angle_v2_report.json")
+
+    if not os.path.exists(sample_vid) or not os.path.exists(sample_json):
+        sample_vid = os.path.join(app_dir, "output_videos", "new_3angle.mp4")
+        sample_json = os.path.join(app_dir, "output_videos", "new_3angle_report.json")
+
+    if not os.path.exists(sample_vid) or not os.path.exists(sample_json):
+        sample_vid = os.path.join(app_dir, "output_videos", "multi_angle_3view.mp4")
+        sample_json = os.path.join(app_dir, "output_videos", "multi_angle_3view_report.json")
+
+    if not os.path.exists(sample_vid) or not os.path.exists(sample_json):
+        return jsonify({"error": "Sample 3-angle dataset files not found"}), 404
+
+    with open(sample_json, "r") as fh:
+        report = json.load(fh)
+
+    with lock:
+        state.source = sample_vid
+        state.multi_angle_report = report
+        state.is_multi_angle = True
+        state.init_capture()
+
+    logger.info("Instant 3-Angle sample take loaded: %s", sample_vid)
+    return jsonify({
+        "success": True,
+        "message": "3-Angle Aligned Take loaded successfully",
+        "result": report.get("result", {}),
+    })
+
+
+@app.route("/api/3angle/set_live_cameras", methods=["POST"])
+def api_3angle_set_live_cameras():
+    """Configures 3 live camera RTSP / device sources."""
+    data = request.json or {}
+    cam_top = data.get("cam_top", "").strip()
+    cam_side = data.get("cam_side", "").strip()
+    cam_flank = data.get("cam_flank", "").strip()
+
+    with lock:
+        state.live_cameras = {
+            "cam_top": cam_top,
+            "cam_side": cam_side,
+            "cam_flank": cam_flank,
+        }
+        if cam_side:
+            state.source = cam_side
+            state.init_capture()
+
+    logger.info("Live 3-camera sources updated: %s", state.live_cameras)
+    return jsonify({"success": True, "live_cameras": state.live_cameras})
 
 
 # ---------------------------------------------------------------------------

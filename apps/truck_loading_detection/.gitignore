@@ -11,6 +11,8 @@ output_videos/
 
 # Deep learning weights
 *.pt
+!best.pt
+!yolo11n_carton_seg_best.pt
 *.onnx
 *.engine
 

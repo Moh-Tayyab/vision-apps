@@ -29,12 +29,19 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Models & Binaries (large files)
+# Datasets & Training Data
+datasets/
+**/datasets/
+
+# Models & Training Artifacts
+models/
+**/models/
 *.pt
 !apps/top_camera_counter/best.pt
 !apps/helmet_detection/ppe-detection-best.pt
 !apps/helmet_detection/helmet_yolo.pt
 !apps/truck_loading_detection/yolov8n.pt
+!apps/truck_loading_detection/best.pt
 *.onnx
 *.engine
 *.ts
@@ -42,6 +49,10 @@ Thumbs.db
 cloudflared
 *.zip
 !apps/top_camera_counter/dataset.zip
+
+# Offline Tools & Helper Scripts
+tools/
+scripts/
 
 # Tests outputs & cache
 tests/inference_cache.json
@@ -63,10 +74,7 @@ docker-compose.override.yml
 AGENTS.md
 .agents
 .agent/
-# ML weights/datasets — keep in Releases, never commit new ones (*.pt kept for existing demos)
-*.zip
-*.onnx
-dataset/
-training-data/
+# ML weights/datasets - keep in Releases, never commit new ones
 *.mp4
 !sample_*.mp4
+
