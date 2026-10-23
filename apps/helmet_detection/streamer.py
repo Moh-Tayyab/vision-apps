@@ -1,7 +1,7 @@
 """Shared frame-buffer/streaming helpers for the apps.
 
 Duplicated intentionally per app so each app stays fully independent
-(senior requirement: no shared runtime coupling).
+(architectural requirement: no shared runtime coupling).
 """
 
 from __future__ import annotations
