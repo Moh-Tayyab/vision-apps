@@ -100,8 +100,11 @@ VIDEO_PRESETS = {
 class StreamState:
     def __init__(self):
         app_dir = os.path.dirname(os.path.abspath(__file__))
+        cand_best = os.path.join(app_dir, "best.pt")
         cand_world = os.path.abspath(os.path.join(app_dir, "..", "..", "yolov8s-worldv2.pt"))
-        if os.path.exists(cand_world):
+        if os.path.exists(cand_best):
+            self.model_name = cand_best
+        elif os.path.exists(cand_world):
             self.model_name = cand_world
         else:
             self.model_name = os.path.join(app_dir, "yolov8n.pt")
@@ -737,13 +740,92 @@ def api_reset():
 @app.route("/api/set_source", methods=["POST"])
 def api_set_source():
     data = request.json or {}
-    src = data.get("source", "")
+    src = str(data.get("source", "")).strip()
+    
+    # Security Validation (SSRF & Arbitrary Path Traversal Protection)
+    if src:
+        # 1. Device index (0, 1, etc.)
+        if src.isdigit():
+            validated_src = int(src)
+        # 2. Live streaming protocols
+        elif src.startswith(("rtsp://", "rtmp://")):
+            validated_src = src
+        # 3. HTTP streams (block SSRF against private networks & cloud metadata)
+        elif src.startswith(("http://", "https://")):
+            lower_src = src.lower()
+            if any(forbidden in lower_src for forbidden in ["169.254.", "localhost", "127.0.0.1", "0.0.0.0", "::1"]):
+                logger.warning("Blocked SSRF attempt: %s", src)
+                return jsonify({"error": "Access to private or metadata network endpoints forbidden"}), 403
+            validated_src = src
+        else:
+            # 4. Local video files: restrict strictly to allowed directories
+            allowed_base_dirs = [
+                os.path.abspath(os.path.dirname(__file__)),
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "recorded_video")),
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "uploads")),
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "output_videos")),
+            ]
+            if not os.path.isabs(src):
+                abs_target = os.path.abspath(os.path.join(os.path.dirname(__file__), src))
+            else:
+                abs_target = os.path.abspath(src)
+                
+            is_allowed = any(os.path.commonpath([d, abs_target]) == d for d in allowed_base_dirs)
+            if not is_allowed or not os.path.exists(abs_target):
+                logger.warning("Blocked path traversal / unauthorized source access attempt: %s", src)
+                return jsonify({"error": "Forbidden: Path is outside allowed video directories"}), 403
+            validated_src = abs_target
+    else:
+        validated_src = ""
+
     with lock:
-        state.source = src
+        state.source = validated_src
         state.counter.reset_counts()
         state.init_capture()
-    logger.info("Source changed to: %s", src or "(none)")
-    return jsonify({"success": True, "source": state.source, "connection_status": state.connection_status})
+    logger.info("Source changed to: %s", validated_src or "(none)")
+    return jsonify({"success": True, "source": str(state.source), "connection_status": state.connection_status})
+
+
+@app.route("/healthz")
+def healthz():
+    """Liveness and readiness health probe."""
+    is_healthy = state.cap is not None and state.cap.isOpened()
+    return jsonify({
+        "status": "healthy" if is_healthy else "degraded",
+        "fps": round(state.actual_fps, 1),
+        "frame_idx": state.frame_idx,
+        "net_count": state.counter.net_count if state.counter else 0,
+        "connection_status": state.connection_status,
+    }), (200 if is_healthy or state.source == "" else 503)
+
+
+@app.route("/metrics")
+def metrics():
+    """Prometheus-compatible plaintext metrics."""
+    c = state.counter
+    net = c.net_count if c else 0
+    total_in = c.total_in if c else 0
+    total_out = c.total_out if c else 0
+    worker_in = c.worker_trips_in if c else 0
+    fps = round(state.actual_fps, 2)
+    lines = [
+        "# HELP carton_counter_fps Current processing frames per second",
+        "# TYPE carton_counter_fps gauge",
+        f"carton_counter_fps {fps}",
+        "# HELP carton_counter_total_in Total cartons loaded into truck",
+        "# TYPE carton_counter_total_in counter",
+        f"carton_counter_total_in {total_in}",
+        "# HELP carton_counter_total_out Total cartons unloaded or returned",
+        "# TYPE carton_counter_total_out counter",
+        f"carton_counter_total_out {total_out}",
+        "# HELP carton_counter_net Net cartons loaded",
+        "# TYPE carton_counter_net gauge",
+        f"carton_counter_net {net}",
+        "# HELP carton_counter_worker_trips Total worker trips recorded",
+        "# TYPE carton_counter_worker_trips counter",
+        f"carton_counter_worker_trips {worker_in}",
+    ]
+    return "\n".join(lines) + "\n", 200, {"Content-Type": "text/plain; version=0.0.4"}
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -1230,13 +1312,22 @@ atexit.register(state.cleanup)
 
 
 # ---------------------------------------------------------------------------
-# CORS Headers (for cross-origin browser access)
+# CORS Headers (Strictly validated origin, avoiding wildcard vulnerability)
 # ---------------------------------------------------------------------------
+CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "localhost,127.0.0.1").strip()
+
 @app.after_request
 def _add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    origin = request.headers.get("Origin")
+    if CORS_ORIGIN == "*":
+        response.headers["Access-Control-Allow-Origin"] = "*"
+    elif origin:
+        allowed = [o.strip() for o in CORS_ORIGIN.split(",") if o.strip()]
+        if any(o in origin for o in allowed) or origin.startswith(("http://localhost", "http://127.0.0.1")):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return response
 
 

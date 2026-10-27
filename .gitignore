@@ -77,4 +77,11 @@ AGENTS.md
 # ML weights/datasets - keep in Releases, never commit new ones
 *.mp4
 !sample_*.mp4
+!apps/truck_loading_detection/recorded_video/synchronized/*.mp4
+
+# Reports and scratch plans
+CARTON_COUNT_*.md
+*.json
+!package*.json
+!tsconfig*.json
 

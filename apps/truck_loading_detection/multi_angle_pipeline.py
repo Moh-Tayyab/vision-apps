@@ -113,12 +113,12 @@ class CameraAnalysis:
 # Phase A - per camera analysis
 # ---------------------------------------------------------------------------
 
-def _cache_key(spec: CameraSpec, stride: int, conf: float) -> str:
-    """Cache key covers ONLY the detection inputs, so tripwire tweaks are free."""
+def _cache_key(spec: CameraSpec, stride: int, conf: float, model_tag: str = "") -> str:
+    """Cache key covers detection inputs and model, so tripwire tweaks are free."""
     st = os.stat(spec.video_path)
     raw = (f"{os.path.abspath(spec.video_path)}|{st.st_mtime}|{st.st_size}|{stride}|{conf}"
            f"|{spec.roi_mode}|{spec.slice_frac}|{spec.direction}|{spec.reference_carton_area}"
-           f"|{spec.roi_y_frac}|{spec.imgsz}")
+           f"|{spec.roi_y_frac}|{spec.imgsz}|{model_tag}")
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
@@ -133,7 +133,13 @@ def analyse_camera(
 ) -> CameraAnalysis:
     """Runs YOLO tracking + carton detection over one video (Phase A)."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    key = _cache_key(spec, stride, conf)
+    is_carton_model = False
+    if hasattr(model, "names") and isinstance(model.names, dict):
+        if model.names.get(0, "").lower() in ["carton", "box"]:
+            is_carton_model = True
+
+    model_tag = "carton_model" if is_carton_model else "person_model"
+    key = _cache_key(spec, stride, conf, model_tag)
     stem = os.path.splitext(os.path.basename(spec.video_path))[0]
     safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in stem)
     cache_path = os.path.join(CACHE_DIR, f"{spec.camera_id}_{safe_stem}_{key}.pkl")
@@ -146,7 +152,7 @@ def analyse_camera(
         # it was created in).
         analysis = CameraAnalysis(**blob)
         print(f"[Phase A] {spec.camera_id}: loaded cached detections "
-              f"({analysis.frame_count} frames)")
+              f"({analysis.frame_count} frames, mode={model_tag})")
     else:
         cap = cv2.VideoCapture(spec.video_path)
         if not cap.isOpened():
@@ -189,11 +195,17 @@ def analyse_camera(
                         tids = res[0].boxes.id.cpu().numpy()
                         cfs = res[0].boxes.conf.cpu().numpy()
                         for b, tid, cf in zip(boxes, tids, cfs):
-                            is_holding, _h_conf, _cbox, qty, _dbg = detector.detect_carton(
-                                frame, tuple(b), spec.direction
-                            )
-                            objects.append((int(tid), tuple(float(v) for v in b), "person", float(cf),
-                                            int(qty) if is_holding else 0))
+                            if is_carton_model:
+                                # DIRECT CARTON TRACKING:
+                                # Detected object is a physical carton instance.
+                                # Each carton has qty=1 and is tracked individually across the tripwire.
+                                objects.append((int(tid), tuple(float(v) for v in b), "carton", float(cf), 1))
+                            else:
+                                is_holding, _h_conf, _cbox, qty, _dbg = detector.detect_carton(
+                                    frame, tuple(b), spec.direction
+                                )
+                                objects.append((int(tid), tuple(float(v) for v in b), "person", float(cf),
+                                                int(qty) if is_holding else 0))
                     last_objects = objects
                 frames.append(list(last_objects))
         finally:
@@ -210,7 +222,7 @@ def analyse_camera(
         )
         with open(cache_path, "wb") as fh:
             pickle.dump(asdict(analysis), fh)
-        print(f"[Phase A] {spec.camera_id}: {frame_count} frames detected in {time.time() - t0:.1f}s")
+        print(f"[Phase A] {spec.camera_id}: {frame_count} frames detected in {time.time() - t0:.1f}s ({model_tag})")
 
     # Tripwire geometry + local event pass (cheap, recomputed every run).
     line_pos = int((spec.line_pos_frac * analysis.height)
@@ -282,8 +294,8 @@ class MultiAnglePipeline:
     def __init__(
         self,
         camera_specs: List[CameraSpec],
-        model_path: str = "yolo11n.pt",
-        conf: float = 0.22,
+        model_path: str = "best.pt",
+        conf: float = 0.15,
         iou: float = 0.45,
         frame_stride: int = 2,
         imgsz: int = 640,
@@ -293,10 +305,16 @@ class MultiAnglePipeline:
         use_cache: bool = True,
         hud_metric: str = "count",
         count_directions: Optional[List[str]] = None,
+        fusion_mode: Optional[str] = None,
     ):
         self.camera_specs = camera_specs
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        cand_best = os.path.join(app_dir, "best.pt")
+        if (not model_path or model_path in ("best.pt", "yolo11n.pt")) and os.path.exists(cand_best):
+            model_path = cand_best
+
         if not os.path.isabs(model_path) and not os.path.exists(model_path):
-            local = os.path.join(os.path.dirname(os.path.abspath(__file__)), model_path)
+            local = os.path.join(app_dir, model_path)
             if os.path.exists(local):
                 model_path = local
         self.model_path = model_path
@@ -317,6 +335,28 @@ class MultiAnglePipeline:
                     count_directions = list(s.count_directions)
                     break
         self.count_directions = count_directions
+
+        # Detect carton-centric model (class 0 = carton) vs person model
+        self.is_carton_model = False
+        try:
+            _probe = YOLO(model_path)
+            if hasattr(_probe, "names") and isinstance(_probe.names, dict):
+                if _probe.names.get(0, "").lower() in ("carton", "box"):
+                    self.is_carton_model = True
+        except Exception:
+            pass
+        del _probe
+
+        # Default fusion_mode: "carton" for carton models, "wh" for person models
+        if fusion_mode is None:
+            self.fusion_mode = "carton" if self.is_carton_model else "wh"
+        else:
+            self.fusion_mode = fusion_mode
+
+        # Carton models typically run at lower confidence; auto-lower if the
+        # caller passed a person-model default (>=0.15) and didn't override.
+        if self.is_carton_model and conf >= 0.15:
+            self.conf = 0.05
 
         self.model = YOLO(model_path)
         self.analyses: Dict[str, CameraAnalysis] = {}
@@ -417,7 +457,8 @@ class MultiAnglePipeline:
         canvas_w = total_width
 
         engine = MultiAngleFusionEngine(time_window_sec=self.time_window_sec,
-                                        count_directions=self.count_directions)
+                                        count_directions=self.count_directions,
+                                        fusion_mode=self.fusion_mode)
         for spec in self.camera_specs:
             a = self.analyses[spec.camera_id]
             engine.add_camera(CameraAngleConfig(
@@ -506,7 +547,7 @@ class MultiAnglePipeline:
                 for tid, bbox, cls_name, conf, qty in objs:
                     x1, y1, x2, y2 = bbox
                     scaled_objs.append((tid, (x1 * pscale, y1 * pscale, x2 * pscale, y2 * pscale),
-                                        conf, qty))
+                                        cls_name, conf, qty))
 
                 if state == "LIVE":
                     # The tracker works in ORIGINAL pixel space so that the
@@ -530,17 +571,21 @@ class MultiAnglePipeline:
                 color = {"width": (16, 185, 129), "height": (6, 182, 212),
                          "width_sampler": (245, 158, 11),
                          "corroborator": (245, 158, 11)}.get(spec.role, (200, 200, 200))
-                for tid, (bx1, by1, bx2, by2), cf, qty in scaled_objs:
-                    cv2.rectangle(pane, (int(bx1), int(by1)), (int(bx2), int(by2)), color, 2)
-                    tag = f"WORKER {tid}"
-                    if qty > 0:
-                        tag += f"  [{qty} CARTON{'S' if qty > 1 else ''}]"
+                for tid, (bx1, by1, bx2, by2), cls_name, cf, qty in scaled_objs:
+                    box_color = (60, 220, 100) if cls_name == "carton" else color
+                    cv2.rectangle(pane, (int(bx1), int(by1)), (int(bx2), int(by2)), box_color, 2)
+                    if cls_name == "carton":
+                        tag = f"CARTON #{tid}"
+                    else:
+                        tag = f"WORKER {tid}"
+                        if qty > 0:
+                            tag += f"  [{qty} CARTON{'S' if qty > 1 else ''}]"
                     (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 2)
                     ty = max(20, int(by1) - 6)
                     tx = int(bx1)
                     cv2.rectangle(pane, (tx, ty - th - 5), (tx + tw + 6, ty + 3), (10, 14, 24), -1)
                     cv2.putText(pane, tag, (tx + 3, ty - 2), cv2.FONT_HERSHEY_SIMPLEX,
-                                0.52, color, 2)
+                                0.52, box_color, 2)
 
                 badge = f"{spec.camera_id.upper()} ({spec.role})"
                 cv2.rectangle(pane, (0, 0), (pw, 34), (20, 28, 45), -1)
@@ -618,11 +663,16 @@ class MultiAnglePipeline:
             if active_toast and g_time <= toast_expiry:
                 cv2.rectangle(hud, (toast_x, 15), (canvas_w - 25, 125), (6, 78, 59), -1)
                 cv2.rectangle(hud, (toast_x, 15), (canvas_w - 125, 125), (16, 185, 129), 2)
-                txt = (f"+{active_toast['fused_cartons']} LOADED "
-                       f"({active_toast['consensus_status']})")
+                if self.fusion_mode == "carton":
+                    txt = (f"+{active_toast['fused_cartons']} CARTON LOADED "
+                           f"({active_toast['consensus_status']})")
+                    eq = (f"Cameras: {', '.join(active_toast.get('corroborating_cameras', []))}")
+                else:
+                    txt = (f"+{active_toast['fused_cartons']} LOADED "
+                           f"({active_toast['consensus_status']})")
+                    eq = (f"W={active_toast['top_camera_width']} x H={active_toast['side_camera_height']}")
                 cv2.putText(hud, txt, (toast_x + 18, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                             (209, 250, 229), 2)
-                eq = (f"W={active_toast['top_camera_width']} x H={active_toast['side_camera_height']}")
                 cv2.putText(hud, eq, (toast_x + 18, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                             (248, 250, 252), 1)
             else:
@@ -649,6 +699,15 @@ class MultiAnglePipeline:
         final_summary = engine.get_summary()
         diag = self.sync_report.get("diagnostics", {})
 
+        # Carton-direct reading: each fused event = 1 carton (deduplicated across cameras)
+        loaded_cartons_direct = sum(1 for e in final_summary["events"]
+                                    if e.get("direction") == "IN")
+        returned_cartons_direct = sum(1 for e in final_summary["events"]
+                                      if e.get("direction") == "OUT")
+        final_summary["loaded_cartons_direct"] = loaded_cartons_direct
+        final_summary["returned_cartons_direct"] = returned_cartons_direct
+        final_summary["net_cartons_direct"] = loaded_cartons_direct - returned_cartons_direct
+
         # Two readings of the same fusion, because the geometry of the load
         # decides which one is right:
         #   product (W x H)  - the carton block is W wide and H high (a stack).
@@ -663,12 +722,20 @@ class MultiAnglePipeline:
         final_summary["loaded_cartons_count"] = cnt["in"]
         final_summary["returned_cartons_count"] = cnt["out"]
         final_summary["net_cartons_count"] = cnt["in"] - cnt["out"]
-        final_summary["interpretation_note"] = (
-            "product = W x H (stacked load, the truck-loading case). "
-            "count = max(W, H) (cartons side by side in one row). "
-            "Which one applies depends on how the cartons are stacked in the "
-            "scene; check the fused events before quoting a number."
-        )
+        if self.fusion_mode == "carton":
+            final_summary["interpretation_note"] = (
+                "direct = one carton per fused event (cross-camera deduplicated). "
+                "product = W x H (stacked load, legacy). "
+                "count = max(W, H) (cartons side by side in one row, legacy). "
+                "For carton-centric models (best.pt), use 'direct' as the authoritative count."
+            )
+        else:
+            final_summary["interpretation_note"] = (
+                "product = W x H (stacked load, the truck-loading case). "
+                "count = max(W, H) (cartons side by side in one row). "
+                "Which one applies depends on how the cartons are stacked in the "
+                "scene; check the fused events before quoting a number."
+            )
 
         low_conf = {c: d for c, d in diag.items() if d.get("confidence", 0.0) < 0.70}
 
@@ -811,6 +878,8 @@ def main() -> None:
                              "loads, product = W x H for stacked loads")
     parser.add_argument("--count-directions", type=str, default=None,
                         help="Comma separated tripwire directions that count, e.g. IN")
+    parser.add_argument("--fusion-mode", choices=["carton", "wh"], default=None,
+                        help="Fusion mode: carton = direct per-carton dedup, wh = legacy W x H")
     parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args()
 
@@ -856,6 +925,7 @@ def main() -> None:
         hud_metric=args.hud_metric,
         count_directions=([d.strip().upper() for d in args.count_directions.split(",")]
                           if args.count_directions else None),
+        fusion_mode=args.fusion_mode,
     )
 
     pipeline.analyse()
@@ -866,9 +936,15 @@ def main() -> None:
 
     result = report["result"]
     print("\n--- Summary Results ---")
-    print(f"Total Loaded Cartons : {result['total_loaded_cartons']}")
-    print(f"Total Returned       : {result['total_returned_cartons']}")
-    print(f"Net Cartons          : {result['net_cartons']}")
+    print(f"Fusion Mode          : {pipeline.fusion_mode}")
+    if pipeline.fusion_mode == "carton":
+        print(f"Total Loaded Cartons : {result.get('loaded_cartons_direct', result['total_loaded_cartons'])} (direct)")
+        print(f"Total Returned       : {result.get('returned_cartons_direct', result['total_returned_cartons'])} (direct)")
+        print(f"Net Cartons          : {result.get('net_cartons_direct', result['net_cartons'])} (direct)")
+    else:
+        print(f"Total Loaded Cartons : {result['total_loaded_cartons']}")
+        print(f"Total Returned       : {result['total_returned_cartons']}")
+        print(f"Net Cartons          : {result['net_cartons']}")
     print(f"Worker Trips         : {result['total_worker_trips']}")
     print(f"Fused Events         : {result['fused_events_count']}")
     print(f"Consensus Breakdown  : {result.get('consensus_breakdown')}")

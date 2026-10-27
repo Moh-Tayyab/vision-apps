@@ -16,6 +16,16 @@ from collections import defaultdict, deque
 from typing import Dict, List, Optional, Sequence, Tuple, Any
 import time
 import math
+import os
+import sys
+
+_sys_path_inserted = False
+for _p in (os.path.dirname(os.path.abspath(__file__)),):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+        _sys_path_inserted = True
+
+from carton_crossing_fusion import CartonCrossingFusion, CartonCrossing  # noqa: E402
 
 
 class CameraAngleConfig:
@@ -157,15 +167,21 @@ class MultiAngleFusionEngine:
     Fuses passing events across all configured camera angles.
     Maintains a sliding temporal window to match events from Camera 1 and Camera 2.
     """
-    def __init__(self, time_window_sec: float = 0.85, count_directions: Optional[Sequence[str]] = None):
+    def __init__(self, time_window_sec: float = 0.85, count_directions: Optional[Sequence[str]] = None,
+                 fusion_mode: str = "wh"):
         self.time_window_sec = time_window_sec
         # Which tripwire directions contribute to the carton totals. Set it to
         # ["IN"] when the cartons only ever travel one way (e.g. a pallet that
         # is only being loaded), so a worker walking back past the staging
         # area cannot add phantom "returned" cartons.
         self.count_directions = tuple(count_directions) if count_directions else ("IN", "OUT")
+        # Fusion mode: "wh" = legacy Width x Height (stacked load), "carton" = direct
+        # carton-centric counting with cross-camera deduplication.
+        self.fusion_mode = fusion_mode
         self.trackers: Dict[str, AngleTripwireTracker] = {}
         self.fused_events: List[Dict[str, Any]] = []
+        # Carton-centric fusion engine (used when fusion_mode == "carton")
+        self._carton_fusion: Optional[CartonCrossingFusion] = None
         # role == "width_sampler": (timestamp, width) readings taken from a
         # camera that cannot produce tripwire crossings (e.g. a handheld
         # overhead shot) but can still report how WIDE a load is.
@@ -181,6 +197,14 @@ class MultiAngleFusionEngine:
             self.sampler_readings.setdefault(config.camera_id, [])
             return
         self.trackers[config.camera_id] = AngleTripwireTracker(config)
+        if self.fusion_mode == "carton":
+            if self._carton_fusion is None:
+                self._carton_fusion = CartonCrossingFusion(
+                    time_window_sec=self.time_window_sec,
+                    count_directions=self.count_directions,
+                    min_cameras=1,
+                )
+            self._carton_fusion.add_camera(config.camera_id)
 
     def reset(self) -> None:
         for t in self.trackers.values():
@@ -190,6 +214,8 @@ class MultiAngleFusionEngine:
         self.total_loaded_cartons = 0
         self.total_returned_cartons = 0
         self.total_worker_trips = 0
+        if self._carton_fusion is not None:
+            self._carton_fusion.reset()
 
     def update_camera_frame(
         self,
@@ -210,7 +236,20 @@ class MultiAngleFusionEngine:
             raise ValueError(f"Unknown camera_id: {camera_id}")
 
         tracker = self.trackers[camera_id]
-        return tracker.update(tracked_objects, frame_idx, timestamp_sec)
+        events = tracker.update(tracked_objects, frame_idx, timestamp_sec)
+
+        # Carton-centric mode: ingest each crossing into the dedup engine.
+        if self.fusion_mode == "carton" and self._carton_fusion is not None:
+            for ev in events:
+                self._carton_fusion.ingest(CartonCrossing(
+                    camera_id=ev["camera_id"],
+                    track_id=ev["track_id"],
+                    timestamp_sec=ev["timestamp_sec"],
+                    direction=ev["direction"],
+                    bbox=ev["bbox"],
+                    confidence=ev.get("confidence", 1.0),
+                ))
+        return events
 
     def _sampled_width(self, camera_id: str, timestamp_sec: float) -> Optional[int]:
         """Most recent width reading for a sampler camera, within the window."""
@@ -238,14 +277,49 @@ class MultiAngleFusionEngine:
     def process_time_window_consensus(self, current_time_sec: float) -> List[Dict[str, Any]]:
         """
         Scans recent angle events from all cameras within the time window.
-        Fuses complementary information (Width x Height).
-
-        Roles:
-          - "width"       : provides the horizontal carton span (W)
-          - "height"      : provides the vertical carton stack (H)
-          - "corroborator": third angle, confirms or denies an event but never
-                            contributes a count on its own.
+        Fuses complementary information (Width x Height) OR direct carton
+        deduplication, depending on fusion_mode.
         """
+        # --- Carton-centric mode: direct deduplication via CartonCrossingFusion ---
+        if self.fusion_mode == "carton":
+            if self._carton_fusion is None:
+                return []
+            summary = self._carton_fusion.fuse(current_time_sec)
+            fused_now = []
+            for carton in summary.cartons:
+                f_record = {
+                    "fused_id": carton.carton_id,
+                    "timestamp_sec": carton.timestamp_sec,
+                    "direction": carton.direction,
+                    "fused_cartons": 1,
+                    "top_camera_width": 1,
+                    "side_camera_height": 1,
+                    "consensus_status": (
+                        "THREE_CAMERA_VERIFIED" if len(carton.cameras_seen) >= 3
+                        else ("DUAL_CAMERA_VERIFIED" if len(carton.cameras_seen) >= 2
+                              else "SINGLE_CAMERA")
+                    ),
+                    "corroborating_cameras": [c for c in carton.cameras_seen],
+                    "contributing_events": [
+                        {
+                            "camera_id": e.camera_id,
+                            "track_id": e.track_id,
+                            "direction": e.direction,
+                            "timestamp_sec": e.timestamp_sec,
+                            "bbox": e.bbox,
+                            "confidence": e.confidence,
+                        }
+                        for e in carton.evidences
+                    ],
+                }
+                # Update running totals
+                self._apply_count(carton.direction, 1)
+                self.total_worker_trips += 1
+                self.fused_events.append(f_record)
+                fused_now.append(f_record)
+            return fused_now
+
+        # --- Legacy W x H mode ---
         unfused_events: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
         # Collect events that haven't been incorporated into a fused event

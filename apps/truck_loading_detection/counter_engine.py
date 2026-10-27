@@ -74,8 +74,18 @@ class FlightCartonTracker:
     Zero-training Classical Computer Vision Engine for thrown / in-flight cartons passing
     through the vertical tripwire corridor. Tracks cardboard kraft & tape color trajectories.
     """
-    def __init__(self, line_x: int, hysteresis: int = 15, loading_direction: str = "right_to_left", cooldown: int = 15):
+    def __init__(
+        self,
+        line_x: int = 320,
+        line_y: Optional[int] = None,
+        line_orientation: str = "vertical",
+        hysteresis: int = 15,
+        loading_direction: str = "right_to_left",
+        cooldown: int = 15,
+    ):
         self.line_x = line_x
+        self.line_y = line_y
+        self.line_orientation = line_orientation.lower()
         self.hysteresis = hysteresis
         self.loading_direction = loading_direction.lower()
         self.cooldown = cooldown
@@ -93,6 +103,12 @@ class FlightCartonTracker:
 
     def set_line_x(self, line_x: int):
         self.line_x = line_x
+
+    def set_line_y(self, line_y: int):
+        self.line_y = line_y
+
+    def set_line_orientation(self, orientation: str):
+        self.line_orientation = orientation.lower()
 
     def set_loading_direction(self, direction: str):
         self.loading_direction = direction.lower()
@@ -142,10 +158,17 @@ class FlightCartonTracker:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         closed = cv2.morphologyEx(carton_motion, cv2.MORPH_CLOSE, kernel)
 
-        roi_y1 = max(30, int(frame.shape[0] * 0.12))
-        roi_y2 = int(frame.shape[0] * 0.94)
-        roi_x1 = max(0, self.line_x - 105)
-        roi_x2 = min(frame.shape[1], self.line_x + 105)
+        if self.line_orientation == "horizontal":
+            ly = self.line_y if self.line_y is not None else self.line_x
+            roi_y1 = max(0, ly - 105)
+            roi_y2 = min(frame.shape[0], ly + 105)
+            roi_x1 = max(30, int(frame.shape[1] * 0.05))
+            roi_x2 = int(frame.shape[1] * 0.95)
+        else:
+            roi_y1 = max(30, int(frame.shape[0] * 0.12))
+            roi_y2 = int(frame.shape[0] * 0.94)
+            roi_x1 = max(0, self.line_x - 105)
+            roi_x2 = min(frame.shape[1], self.line_x + 105)
         zone = closed[roi_y1:roi_y2, roi_x1:roi_x2]
 
         cnts, _ = cv2.findContours(zone, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -187,20 +210,35 @@ class FlightCartonTracker:
                     matched = True
                     self.active_boxes[tid] = (x, y, x + bw, y + bh)
                     first_x = pts[0][0]
+                    first_y = pts[0][1]
                     # Require minimum 5 frames of tracking before counting a flight crossing
                     if tid not in self.crossed_tracks and len(pts) >= 5:
                         if frame_idx - getattr(self, "last_throw_f", -99) >= 10:
                             throw_qty = 2 if (a >= 2500 or bh >= 110) else 1
-                            if self.loading_direction == "right_to_left":
-                                if first_x >= self.line_x - 5 and cx <= self.line_x - self.hysteresis:
-                                    self.crossed_tracks.add(tid)
-                                    self.last_throw_f = frame_idx
-                                    crossings.append((tid, (x, y, x + bw, y + bh), cx, cy, throw_qty))
+                            is_crossed = False
+                            if self.line_orientation == "horizontal":
+                                ly = self.line_y if self.line_y is not None else self.line_x
+                                if self.loading_direction == "top_to_bottom":
+                                    is_crossed = (first_y <= ly + 5 and cy >= ly + self.hysteresis)
+                                elif self.loading_direction == "bottom_to_top":
+                                    is_crossed = (first_y >= ly - 5 and cy <= ly - self.hysteresis)
+                                else:  # "any" mode: count crossing in either direction
+                                    is_crossed = (first_y <= ly + 5 and cy >= ly + self.hysteresis) or \
+                                                 (first_y >= ly - 5 and cy <= ly - self.hysteresis)
                             else:
-                                if first_x <= self.line_x + 5 and cx >= self.line_x + self.hysteresis:
-                                    self.crossed_tracks.add(tid)
-                                    self.last_throw_f = frame_idx
-                                    crossings.append((tid, (x, y, x + bw, y + bh), cx, cy, throw_qty))
+                                lx = self.line_x
+                                if self.loading_direction == "right_to_left":
+                                    is_crossed = (first_x >= lx - 5 and cx <= lx - self.hysteresis)
+                                elif self.loading_direction == "left_to_right":
+                                    is_crossed = (first_x <= lx + 5 and cx >= lx + self.hysteresis)
+                                else:  # "any" mode: count crossing in either direction
+                                    is_crossed = (first_x >= lx - 5 and cx <= lx - self.hysteresis) or \
+                                                 (first_x <= lx + 5 and cx >= lx + self.hysteresis)
+
+                            if is_crossed:
+                                self.crossed_tracks.add(tid)
+                                self.last_throw_f = frame_idx
+                                crossings.append((tid, (x, y, x + bw, y + bh), cx, cy, throw_qty))
                     break
             if not matched:
                 self.tracks[self.next_id] = [(cx, cy, frame_idx)]
@@ -227,7 +265,9 @@ class TripwireCounter:
 
     def __init__(
         self,
-        line_x: int,
+        line_x: int = 320,
+        line_y: Optional[int] = None,
+        line_orientation: str = "vertical",
         hysteresis: int = 15,
         history_len: int = 30,
         cooldown_frames: int = 15,
@@ -242,6 +282,8 @@ class TripwireCounter:
         """
         Args:
             line_x: X-coordinate of the vertical virtual line.
+            line_y: Y-coordinate of the horizontal virtual line (if horizontal orientation).
+            line_orientation: 'vertical' (checks X crossing) or 'horizontal' (checks Y crossing).
             hysteresis: Pixel buffer around the line to prevent noise oscillation.
             history_len: Max past positions to maintain per track ID.
             cooldown_frames: Number of frames before the same track ID can trigger another crossing.
@@ -251,9 +293,11 @@ class TripwireCounter:
             min_displacement_px: Minimum trajectory travel distance required across the line.
             holding_memory_frames: Frames to remember worker-carton association through brief occlusions.
             suppression_window_frames: Frame window to suppress worker double-counting after carton crossing.
-            loading_direction: Direction that counts as loading ("left_to_right" or "right_to_left").
+            loading_direction: Direction that counts as loading ("left_to_right", "right_to_left", or "any").
         """
         self.line_x = line_x
+        self.line_y = line_y
+        self.line_orientation = line_orientation.lower()
         self.hysteresis = hysteresis
         self.history_len = history_len
         self.cooldown_frames = cooldown_frames
@@ -270,7 +314,7 @@ class TripwireCounter:
 
         # State tracking
         self.track_history: Dict[int, deque] = defaultdict(lambda: deque(maxlen=self.history_len))
-        self.track_side: Dict[int, str] = {}  # 'left' or 'right'
+        self.track_side: Dict[int, str] = {}  # 'left'/'right' or 'top'/'bottom'
         self.last_cross_frame: Dict[int, int] = {}
         self.track_classes: Dict[int, str] = {}
         self.track_boxes: Dict[int, Tuple[float, float, float, float]] = {}
@@ -298,6 +342,8 @@ class TripwireCounter:
         # Zero-training Classical CV Flight Tracker (Thrown / Air-passed Cartons)
         self.flight_tracker = FlightCartonTracker(
             line_x=self.line_x,
+            line_y=self.line_y,
+            line_orientation=self.line_orientation,
             hysteresis=self.hysteresis,
             loading_direction=self.loading_direction,
             cooldown=15,
@@ -330,8 +376,18 @@ class TripwireCounter:
         self.line_x = new_x
         self.flight_tracker.set_line_x(new_x)
 
+    def set_line_y(self, new_y: int) -> None:
+        """Update virtual line Y coordinate interactively."""
+        self.line_y = new_y
+        self.flight_tracker.set_line_y(new_y)
+
+    def set_line_orientation(self, orientation: str) -> None:
+        """Set line orientation: 'vertical' or 'horizontal'."""
+        self.line_orientation = orientation.lower()
+        self.flight_tracker.set_line_orientation(orientation)
+
     def set_loading_direction(self, direction: str) -> None:
-        """Set primary loading direction: 'left_to_right' or 'right_to_left'."""
+        """Set primary loading direction: 'left_to_right', 'right_to_left', or 'any'."""
         self.loading_direction = direction.lower()
         self.flight_tracker.set_loading_direction(direction)
 
@@ -521,10 +577,22 @@ class TripwireCounter:
 
             # Initial side assignment (direction-aware assignment avoiding hysteresis dead-zone traps)
             if track_id not in self.track_side:
-                if self.loading_direction == "left_to_right":
-                    self.track_side[track_id] = "right" if center_x >= (self.line_x + self.hysteresis) else "left"
+                if self.line_orientation == "horizontal":
+                    l_coord = self.line_y if self.line_y is not None else self.line_x
+                    if self.loading_direction in ("top_to_bottom", "above_to_below"):
+                        self.track_side[track_id] = "bottom" if center_y >= (l_coord + self.hysteresis) else "top"
+                    elif self.loading_direction in ("bottom_to_top", "below_to_above"):
+                        self.track_side[track_id] = "top" if center_y <= (l_coord - self.hysteresis) else "bottom"
+                    else:  # "any" mode
+                        self.track_side[track_id] = "bottom" if center_y >= l_coord else "top"
                 else:
-                    self.track_side[track_id] = "left" if center_x <= (self.line_x - self.hysteresis) else "right"
+                    l_coord = self.line_x
+                    if self.loading_direction == "left_to_right":
+                        self.track_side[track_id] = "right" if center_x >= (l_coord + self.hysteresis) else "left"
+                    elif self.loading_direction == "right_to_left":
+                        self.track_side[track_id] = "left" if center_x <= (l_coord - self.hysteresis) else "right"
+                    else:  # "any" mode
+                        self.track_side[track_id] = "right" if center_x >= l_coord else "left"
 
             # Track carried boxes from true object detections (no noisy HSV brown mask)
             if self.is_person_class(cls_name):
@@ -567,28 +635,64 @@ class TripwireCounter:
             # Trajectory displacement validation
             if len(history) >= 2:
                 start_x = history[0][0]
-                displacement = center_x - start_x
+                start_y = history[0][1]
+                displacement_x = center_x - start_x
+                displacement_y = center_y - start_y
             else:
-                displacement = 0
+                displacement_x = 0
+                displacement_y = 0
 
             is_cargo = self.is_cargo_class(cls_name)
             is_person = self.is_person_class(cls_name)
 
-            # Determine if this movement is in the loading direction
-            moved_left_to_right = (last_side == "left" and center_x >= self.line_x + self.hysteresis)
-            moved_right_to_left = (last_side == "right" and center_x <= self.line_x - self.hysteresis)
+            if self.line_orientation == "horizontal":
+                l_coord = self.line_y if self.line_y is not None else self.line_x
+                moved_above_to_below = (last_side in ("top", "above") and center_y >= l_coord + self.hysteresis)
+                moved_below_to_above = (last_side in ("bottom", "below") and center_y <= l_coord - self.hysteresis)
 
-            if not (moved_left_to_right or moved_right_to_left):
-                continue
+                if not (moved_above_to_below or moved_below_to_above):
+                    continue
 
-            if moved_left_to_right:
-                valid_motion = (displacement >= self.min_displacement_px or len(history) < 2)
-                new_side = "right"
-                is_loading = (self.loading_direction == "left_to_right")
+                if moved_above_to_below:
+                    valid_motion = (displacement_y >= self.min_displacement_px or len(history) < 2)
+                    new_side = "bottom"
+                    if self.loading_direction == "any":
+                        is_loading = True
+                    elif self.loading_direction in ("top_to_bottom", "above_to_below", "left_to_right"):
+                        is_loading = True
+                    else:
+                        is_loading = False
+                else:
+                    valid_motion = (displacement_y <= -self.min_displacement_px or len(history) < 2)
+                    new_side = "top"
+                    if self.loading_direction == "any":
+                        is_loading = True
+                    elif self.loading_direction in ("bottom_to_top", "below_to_above", "right_to_left"):
+                        is_loading = True
+                    else:
+                        is_loading = False
             else:
-                valid_motion = (displacement <= -self.min_displacement_px or len(history) < 2)
-                new_side = "left"
-                is_loading = (self.loading_direction == "right_to_left")
+                l_coord = self.line_x
+                moved_left_to_right = (last_side == "left" and center_x >= l_coord + self.hysteresis)
+                moved_right_to_left = (last_side == "right" and center_x <= l_coord - self.hysteresis)
+
+                if not (moved_left_to_right or moved_right_to_left):
+                    continue
+
+                if moved_left_to_right:
+                    valid_motion = (displacement_x >= self.min_displacement_px or len(history) < 2)
+                    new_side = "right"
+                    if self.loading_direction == "any":
+                        is_loading = True
+                    else:
+                        is_loading = (self.loading_direction == "left_to_right")
+                else:
+                    valid_motion = (displacement_x <= -self.min_displacement_px or len(history) < 2)
+                    new_side = "left"
+                    if self.loading_direction == "any":
+                        is_loading = True
+                    else:
+                        is_loading = (self.loading_direction == "right_to_left")
 
             if not valid_motion:
                 continue
@@ -621,6 +725,10 @@ class TripwireCounter:
                 # Suppress associated worker from double counting
                 if associated_worker is not None:
                     self.suppressed_tracks[associated_worker] = frame_idx + self.suppression_window_frames
+
+                # In direction-agnostic "any" mode, any unique cargo crossing is an IN load
+                if self.loading_direction == "any":
+                    is_loading = True
 
                 if is_loading:
                     self.total_in += 1
@@ -655,11 +763,6 @@ class TripwireCounter:
 
             # Case B: PERSON crossed line (WORKER CHECK)
             elif is_person:
-                if is_loading:
-                    self.worker_trips_in += 1
-                else:
-                    self.worker_trips_out += 1
-
                 is_suppressed = frame_idx < self.suppressed_tracks.get(track_id, 0)
                 held_cargos = self.get_held_cargos(track_id, frame_idx)
                 uncounted_cargos = [cid for cid in held_cargos if cid not in self.suppressed_tracks]
@@ -667,9 +770,13 @@ class TripwireCounter:
 
                 # If no YOLO cargo detected, use classical CV CartonHoldingDetector
                 cv_carton_qty = 0
-                if not is_carrying_carton and frame is not None and is_loading:
+                should_check_cv = (frame is not None) and (is_loading or self.loading_direction == "any")
+                if not is_carrying_carton and should_check_cv:
                     try:
-                        direction_str = self.loading_direction
+                        if self.line_orientation == "horizontal":
+                            direction_str = "top_to_bottom" if moved_above_to_below else "bottom_to_top"
+                        else:
+                            direction_str = "left_to_right" if moved_left_to_right else "right_to_left"
                         is_holding, confidence, carton_box, carton_qty, debug_info = self.carton_detector.detect_carton(
                             frame, (x1, y1, x2, y2), direction=direction_str
                         )
@@ -682,6 +789,16 @@ class TripwireCounter:
                             self.track_holding_scores[track_id] = confidence
                     except Exception:
                         pass
+
+                # In direction-agnostic "any" mode:
+                # Loaded trip if holding carton, otherwise return trip (empty-handed)
+                if self.loading_direction == "any":
+                    is_loading = (is_carrying_carton or cv_carton_qty > 0)
+
+                if is_loading:
+                    self.worker_trips_in += 1
+                else:
+                    self.worker_trips_out += 1
 
                 if is_suppressed:
                     # Associated carton was already counted in this crossing window
