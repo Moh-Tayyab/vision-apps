@@ -1,5 +1,6 @@
 # Large media and video files
 *.mp4
+!recorded_video/synchronized/*.mp4
 *.avi
 *.mov
 *.mkv
