@@ -1,0 +1,9 @@
+event_id,event_timestamp,direction,carton_count,carrying_mode,notes
+session_18_ev_01,2.6,IN,1,single_worker,Carton 1 loaded
+session_18_ev_02,4.2,IN,1,single_worker,Carton 2 loaded
+session_18_ev_03,9.333,IN,1,single_worker,Carton 3 loaded
+session_18_ev_04,13.733,IN,1,single_worker,Carton 4 loaded
+session_18_ev_05,17.233,IN,1,single_worker,Carton 5 loaded
+session_18_ev_06,21.7,IN,1,single_worker,Carton 6 loaded
+session_18_ev_07,24.5,IN,1,single_worker,Carton 7 loaded
+

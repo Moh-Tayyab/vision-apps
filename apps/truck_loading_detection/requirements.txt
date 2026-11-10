@@ -1,9 +1,16 @@
-ultralytics>=8.0.0
-opencv-python-headless>=4.8.0
-torch>=2.0.0
-torchvision>=0.15.0
+# ---------------------------------------------------------------------------
+# Phase 4 — Production Dependency Manifest (pinned)
+# ---------------------------------------------------------------------------
+# Pinned to the tested Python 3.12 CPU environment. No GPU is assumed; torch
+# is the CPU wheel (torch==...+cpu). Rebuild and re-test this file before any
+# version change; do not drift dependency versions between dev and prod.
+ultralytics==8.4.138
+opencv-python-headless==5.0.0.93
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
 lapx>=0.5.5
-numpy>=1.23.0
-flask>=3.0.0
-werkzeug>=3.0.0
-gunicorn>=21.2.0
+numpy==2.3.5
+flask==3.1.3
+werkzeug>=3.0.0,<3.1
+gunicorn==26.1.0
+psutil==7.2.2

@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import time
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from collections import deque
 
 
@@ -140,6 +140,80 @@ class LoadingVisualizer:
                 )
                 cv2.line(frame, pts_list[i - 1], pts_list[i], color, thickness, cv2.LINE_AA)
 
+    def draw_segmentation_masks(
+        self,
+        frame: np.ndarray,
+        masks: List[Any],
+    ):
+        """
+        Renders semi-transparent instance segmentation polygon masks for cartons and workers.
+        masks can contain (poly, class_name, confidence) or (poly, class_name, conf, tid, handling_state, is_occluded).
+        Color Code:
+        - Confirmed Carton: Vivid Cyan/Blue (BGR: 255, 180, 0)
+        - Occluded / Uncertain Carton: Vivid Amber/Gold (BGR: 0, 165, 255)
+        - Worker / Human: Amber/Orange (BGR: 0, 140, 255)
+        """
+        if not masks or len(masks) == 0:
+            return
+
+        overlay = frame.copy()
+        has_polys = False
+        items_to_render = []
+
+        for item in masks:
+            if not item or len(item) < 2:
+                continue
+            poly, cls_name = item[0], item[1]
+            if poly is None or len(poly) < 3:
+                continue
+            has_polys = True
+            poly_int = poly.astype(np.int32) if isinstance(poly, np.ndarray) else np.array(poly, dtype=np.int32)
+            
+            conf = float(item[2]) if len(item) > 2 else 1.0
+            tid = item[3] if len(item) > 3 else None
+            handling_state = str(item[4]) if len(item) > 4 else "AT_REST"
+            is_occluded = bool(item[5]) if len(item) > 5 else False
+
+            is_worker = cls_name.lower() in ("person", "worker", "human")
+            if is_worker:
+                fill_color = (0, 140, 255)
+                border_color = (0, 190, 255)
+            elif is_occluded or handling_state == "OCCLUDED":
+                fill_color = (0, 165, 255)    # Amber/Gold for occluded/uncertain
+                border_color = (0, 210, 255)
+            elif handling_state == "BEING_CARRIED":
+                fill_color = (255, 190, 0)    # Vivid Cyan/Blue
+                border_color = (255, 235, 30)
+            elif handling_state == "PICKUP_LIFTING":
+                fill_color = (240, 210, 0)    # Electric Cyan/Teal
+                border_color = (255, 245, 70)
+            else:
+                fill_color = (255, 180, 0)    # Cyan
+                border_color = (255, 220, 50)
+
+            cv2.fillPoly(overlay, [poly_int], fill_color)
+            items_to_render.append((poly_int, is_worker, border_color, tid, handling_state, is_occluded))
+
+        if has_polys:
+            # Translucent alpha blend
+            cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
+
+        # Draw crisp contour borders and badge labels on top
+        for poly_int, is_worker, border_color, tid, handling_state, is_occluded in items_to_render:
+            cv2.polylines(frame, [poly_int], True, border_color, 2, cv2.LINE_AA)
+            if tid is not None and not is_worker:
+                # Find topmost point for clean status tag
+                min_idx = np.argmin(poly_int[:, 1])
+                tx, ty = int(poly_int[min_idx][0]), int(poly_int[min_idx][1])
+                status_txt = f"C#{tid} [{handling_state}]" if handling_state != "UNKNOWN" else f"C#{tid}"
+                (tw, th), _ = cv2.getTextSize(status_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.36, 1)
+                bx1 = max(0, tx - 2)
+                by1 = max(0, ty - th - 5)
+                bx2 = min(frame.shape[1] - 1, tx + tw + 4)
+                by2 = max(0, ty - 1)
+                cv2.rectangle(frame, (bx1, by1), (bx2, by2), (20, 25, 35), -1)
+                cv2.putText(frame, status_txt, (bx1 + 2, by2 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.36, border_color, 1, cv2.LINE_AA)
+
     def draw_detections(
         self,
         frame: np.ndarray,
@@ -150,11 +224,16 @@ class LoadingVisualizer:
         carton_boxes: Optional[Dict[int, Tuple[int, int, int, int]]] = None,
         holding_scores: Optional[Dict[int, float]] = None,
         worker_qty: Optional[Dict[int, int]] = None,
+        masks: Optional[List[Tuple[Any, str, float]]] = None,
     ):
         """
-        Draws bounding boxes, centroid dots, track IDs, side indicators, and Worker-Carton associations.
+        Draws segmentation polygon masks, bounding boxes, centroid dots, track IDs, side indicators, and Worker-Carton associations.
         Also renders classical CV pre-processed carton bounding boxes on workers.
         """
+        # 0. Draw Segmentation Masks First (Underneath boxes and labels)
+        if masks:
+            self.draw_segmentation_masks(frame, masks)
+
         # Map centroids for association drawing
         centroids = {}
         for track_id, (x1, y1, x2, y2), cls_name, conf in tracked_objects:
