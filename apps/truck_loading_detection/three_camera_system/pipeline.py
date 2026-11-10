@@ -234,7 +234,7 @@ class ThreeCameraCartonPipeline:
                 camera_id=cid,
                 orientation=str(cfg_dict.get("orientation", "vertical")).lower(),
                 line_pos_frac=float(cfg_dict.get("line_pos_frac", 0.50)),
-                direction_sign=int(cfg_dict.get("direction_sign", 1)),
+                direction_sign=int(cfg_dict.get("direction_sign", -1 if cid == "cam_top" else 1)),
                 hysteresis_frac=float(cfg_dict.get("hysteresis_frac", 0.01)),
                 min_displacement_px=float(cfg_dict.get("min_displacement_px", 10.0)),
                 cooldown_frames=int(cfg_dict.get("cooldown_frames", 20)),
@@ -376,12 +376,12 @@ class ThreeCameraCartonPipeline:
         closing_windows = [
             w for w in self._active_crossing_windows
             if not w.committed and (
-                # Zero-Latency Instant Counting:
+                # Instant Multi-Camera Agreement:
                 # Multi-camera agreements commit within 1-2 frames (0.05s);
-                # single-camera observations wait only 0.20s (6 frames) for secondary view.
+                # Single-camera observations wait 1.80s physical transit time for secondary corridor view.
                 (len(w.local_events) >= 2 and (global_t - w.last_time) >= 0.05)
-                or (global_t - w.last_time) >= 0.20
-                or (global_t - w.start_time) >= 0.60
+                or (global_t - w.last_time) >= 1.80
+                or (global_t - w.start_time) >= 2.40
             )
         ]
 
@@ -416,6 +416,14 @@ class ThreeCameraCartonPipeline:
                 if total_dur and (total_dur - win.start_time) <= 1.5 and in_score < 0.22:
                     win.committed = True
                     continue
+                # Suppress uncorroborated single-camera floor/frame boundary artifacts
+                all_cands = [c for c_list in win.local_events.values() for c in c_list]
+                if all_cands:
+                    fc = all_cands[0]
+                    h_bound = fc.image_height or 720.0
+                    if fc.bbox[3] >= 0.96 * h_bound and fc.confidence < 0.22:
+                        win.committed = True
+                        continue
 
             # 1. Consensus Policy
             verdict = self.consensus_policy.evaluate(
@@ -752,6 +760,11 @@ class ThreeCameraCartonPipeline:
         self, ev: LocalCameraCrossingCandidate, arrival_time: Optional[float] = None
     ) -> None:
         """Associate a camera-local crossing with a physical-carton event window."""
+        # Reject uncorroborated floor boundary edge noise (shoe tips / floor border artifacts)
+        h_bound = ev.image_height or 720.0
+        if ev.confidence < 0.20 and ev.bbox[3] >= 0.95 * h_bound and ev.bbox[1] >= 0.85 * h_bound:
+            return
+
         arr_t = arrival_time if arrival_time is not None else ev.timestamp_sec
         ev_dock_xy = None
         if ev.crossing_point_px is not None and ev.image_width and ev.image_height:
@@ -844,7 +857,8 @@ class ThreeCameraCartonPipeline:
                             ev_dock_xy[0] - other_dock_xy[0],
                             ev_dock_xy[1] - other_dock_xy[1],
                         )
-                        if dock_distance > self.associator.max_dock_dist:
+                        corridor_max_dist = max(self.associator.max_dock_dist, 1.80)
+                        if dock_distance > corridor_max_dist:
                             compatible = False
                             break
                 if not compatible:
@@ -1152,13 +1166,17 @@ class ThreeCameraCartonPipeline:
                 None,
             )
             if matched_phys is None:
-                # Check transit refractory absorption: if within 2.2s of a committed carton in same direction AND same spatial lane
+                # Check transit refractory absorption: if within 1.6s of a committed carton on a DIFFERENT camera along the corridor
                 for phys in self.state_machine._physical_cartons.values():
                     if phys.is_committed and phys.last_committed_direction == ev.direction:
+                        # Cross-camera handoff: do not absorb repeat crossings on the SAME camera
+                        if ev.camera_id in phys.contributing_cameras:
+                            continue
                         ref_dt = ev.timestamp_sec - (phys.committed_timestamp or phys.last_seen_time)
-                        if 0.0 <= ref_dt <= 0.7:
+                        if 0.0 <= ref_dt <= 1.6:
                             last_c = phys.last_camera_centers.get(ev.camera_id)
-                            max_y = 60.0
+                            ev_h = max(10.0, ev.bbox[3] - ev.bbox[1])
+                            max_y = max(ev_h * 1.5, 80.0)
                             if last_c is None or abs(ev_center[1] - last_c[1]) <= max_y:
                                 matched_phys = phys
                                 break
@@ -1180,6 +1198,23 @@ class ThreeCameraCartonPipeline:
                 matched_phys.contributing_cameras.add(ev.camera_id)
                 matched_phys.last_seen_time = max(matched_phys.last_seen_time, ev.timestamp_sec)
                 matched_phys.last_camera_centers[ev.camera_id] = ev_center
+
+                # Upgrade committed event to auto-confirmed when cross-camera corroboration is achieved
+                if matched_phys.committed_event_id:
+                    for ev_rec in self._audit_events:
+                        if ev_rec.get("event_id") == matched_phys.committed_event_id:
+                            if ev.camera_id not in ev_rec["participating_cameras"]:
+                                ev_rec["participating_cameras"].append(ev.camera_id)
+                                ev_rec["participating_cameras"].sort()
+                            if not ev_rec.get("is_auto_confirmed") and len(ev_rec["participating_cameras"]) >= 2:
+                                ev_rec["is_auto_confirmed"] = True
+                                ev_rec["requires_review"] = False
+                                ev_rec["state"] = "COUNT_COMMITTED"
+                                ev_rec["notes"] = f"Corroborated across cameras ({', '.join(ev_rec['participating_cameras'])})"
+                                qty = ev_rec.get("carton_count", 1)
+                                self._confirmed_count += qty
+                                self._review_required_count = max(0, self._review_required_count - qty)
+                            break
                 continue
 
             self._add_crossing_candidate_to_window(ev, arrival_time=global_t)

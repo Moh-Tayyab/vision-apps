@@ -2,8 +2,8 @@
   "tripwires": {
     "cam_top": {
       "orientation": "vertical",
-      "line_pos_frac": 0.485,
-      "direction_sign": 1,
+      "line_pos_frac": 0.58,
+      "direction_sign": -1,
       "physically_verified": true
     },
     "cam_side": {
@@ -14,7 +14,7 @@
     },
     "cam_flank": {
       "orientation": "vertical",
-      "line_pos_frac": 0.63,
+      "line_pos_frac": 0.55,
       "direction_sign": 1,
       "physically_verified": true
     }

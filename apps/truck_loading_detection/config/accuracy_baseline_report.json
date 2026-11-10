@@ -1,0 +1,194 @@
+{
+  "benchmark_type": "real_raw_video_evaluation",
+  "timestamp_utc": "2026-11-10T14:39:26Z",
+  "model_path": "apps/truck_loading_detection/best.pt",
+  "inference_stride": 2,
+  "conf_threshold": 0.15,
+  "total_sessions_evaluated": 2,
+  "total_ground_truth_cartons": 15,
+  "total_predicted_cartons": 13,
+  "exact_match_events": 9,
+  "clem_exact_match_pct": 60.0,
+  "net_error_pct": 13.33,
+  "overcount_events": 0,
+  "undercount_events": 0,
+  "missed_events": 6,
+  "spurious_events": 4,
+  "sessions": [
+    {
+      "session_id": "session_18",
+      "session_name": "Scenario 1 (6 GT Cartons, Multi-Worker & Occlusion)",
+      "gt_cartons": 7,
+      "pred_cartons": 7,
+      "exact_matches": 4,
+      "clem_pct": 57.14,
+      "overcount": 0,
+      "undercount": 0,
+      "missed": 3,
+      "spurious": 3,
+      "delta": 0,
+      "telemetry": {
+        "frames_ingested": 817,
+        "frames_inferred": 409,
+        "elapsed_sec": 144.99,
+        "pipeline_fps": 2.8,
+        "confirmed_in": 3,
+        "confirmed_out": 1,
+        "net_count": 5,
+        "review_required": 3
+      },
+      "predicted_events_sample": [
+        {
+          "event_id": "session_18_ev_00001",
+          "t": 3.15,
+          "dir": "IN",
+          "cams": [
+            "cam_flank",
+            "cam_top"
+          ],
+          "confirmed": true
+        },
+        {
+          "event_id": "session_18_ev_00002",
+          "t": 4.22,
+          "dir": "IN",
+          "cams": [
+            "cam_top"
+          ],
+          "confirmed": false
+        },
+        {
+          "event_id": "session_18_ev_00003",
+          "t": 6.73,
+          "dir": "IN",
+          "cams": [
+            "cam_side"
+          ],
+          "confirmed": false
+        },
+        {
+          "event_id": "session_18_ev_00004",
+          "t": 9.43,
+          "dir": "IN",
+          "cams": [
+            "cam_side",
+            "cam_top"
+          ],
+          "confirmed": true
+        },
+        {
+          "event_id": "session_18_ev_00005",
+          "t": 11.23,
+          "dir": "IN",
+          "cams": [
+            "cam_flank"
+          ],
+          "confirmed": false
+        },
+        {
+          "event_id": "session_18_ev_00006",
+          "t": 14.69,
+          "dir": "OUT",
+          "cams": [
+            "cam_flank",
+            "cam_side"
+          ],
+          "confirmed": true
+        },
+        {
+          "event_id": "session_18_ev_00007",
+          "t": 20.05,
+          "dir": "IN",
+          "cams": [
+            "cam_flank",
+            "cam_side",
+            "cam_top"
+          ],
+          "confirmed": true
+        }
+      ]
+    },
+    {
+      "session_id": "session_21",
+      "session_name": "Scenario 2 (8 GT Cartons, Continuous Shift Flow)",
+      "gt_cartons": 8,
+      "pred_cartons": 6,
+      "exact_matches": 5,
+      "clem_pct": 62.5,
+      "overcount": 0,
+      "undercount": 0,
+      "missed": 3,
+      "spurious": 1,
+      "delta": -2,
+      "telemetry": {
+        "frames_ingested": 965,
+        "frames_inferred": 483,
+        "elapsed_sec": 57.99,
+        "pipeline_fps": 8.3,
+        "confirmed_in": 2,
+        "confirmed_out": 1,
+        "net_count": 4,
+        "review_required": 3
+      },
+      "predicted_events_sample": [
+        {
+          "event_id": "session_21_ev_00001",
+          "t": 4.61,
+          "dir": "IN",
+          "cams": [
+            "cam_side",
+            "cam_top"
+          ],
+          "confirmed": true
+        },
+        {
+          "event_id": "session_21_ev_00002",
+          "t": 14.99,
+          "dir": "OUT",
+          "cams": [
+            "cam_flank",
+            "cam_side"
+          ],
+          "confirmed": true
+        },
+        {
+          "event_id": "session_21_ev_00003",
+          "t": 15.35,
+          "dir": "IN",
+          "cams": [
+            "cam_top"
+          ],
+          "confirmed": false
+        },
+        {
+          "event_id": "session_21_ev_00004",
+          "t": 20.72,
+          "dir": "IN",
+          "cams": [
+            "cam_flank"
+          ],
+          "confirmed": false
+        },
+        {
+          "event_id": "session_21_ev_00005",
+          "t": 25.34,
+          "dir": "IN",
+          "cams": [
+            "cam_flank",
+            "cam_side"
+          ],
+          "confirmed": true
+        },
+        {
+          "event_id": "session_21_ev_00006",
+          "t": 26.33,
+          "dir": "IN",
+          "cams": [
+            "cam_side"
+          ],
+          "confirmed": false
+        }
+      ]
+    }
+  ]
+}
