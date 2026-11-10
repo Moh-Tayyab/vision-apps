@@ -73,15 +73,27 @@ docker-compose.override.yml
 # Agent & GSD local files (not pushed)
 AGENTS.md
 .agents
+.agent
 .agent/
+.backup_pre_audit/
+.playwright-cli/
+scratch/
+**/scratch/
+*.db-wal
+*.db-shm
+
 # ML weights/datasets - keep in Releases, never commit new ones
 *.mp4
 !sample_*.mp4
-!apps/truck_loading_detection/recorded_video/synchronized/*.mp4
+!apps/truck_loading_detection/recorded_video/synchronized_normalized/*.mp4
 
 # Reports and scratch plans
 CARTON_COUNT_*.md
 *.json
 !package*.json
 !tsconfig*.json
+!apps/truck_loading_detection/config/**/*.json
+!apps/truck_loading_detection/config/*.json
+!data/ground_truth/*.json
+!data/ground_truth/*.csv
 

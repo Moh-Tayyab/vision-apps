@@ -1,6 +1,6 @@
 # Large media and video files
 *.mp4
-!recorded_video/synchronized/*.mp4
+!recorded_video/synchronized_normalized/*.mp4
 *.avi
 *.mov
 *.mkv
@@ -24,7 +24,17 @@ output_videos/
 # Environment secrets
 .env
 
+# Database files
+*.db
+*.sqlite3
+*.db-wal
+*.db-shm
+
 # Python bytecode & cache
 __pycache__/
 *.py[cod]
 *.log
+
+# Allow configuration JSON files
+!config/**/*.json
+!config/*.json

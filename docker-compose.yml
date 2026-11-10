@@ -1,3 +1,16 @@
+# ---------------------------------------------------------------------------
+# Phase 4 — Production Docker Compose (Carton Counter / Truck Loading Detection)
+# ---------------------------------------------------------------------------
+# Controlled production deployment. CPU-only; no GPU assumed.
+#
+# Persistent storage:
+#   - carton_data: SQLite event store + audit records (/app/data) for carton_counter
+#   - carton_uploads: uploaded video files (/app/uploads)
+#
+# Configuration is injected via environment variables (no hardcoded production
+# secrets). Secrets must be provided through Docker secrets or a protected,
+# non-committed env file -- never baked into the image or this file.
+# ---------------------------------------------------------------------------
 services:
   # App 1: Carton Counter & Truck Loading Detection (Multi-Angle Fusion)
   carton_counter:
@@ -6,27 +19,38 @@ services:
       dockerfile: Dockerfile
     container_name: carton_counter_service
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     environment:
       - PORT=5000
       - HOST=0.0.0.0
+      - CARTON_API_KEY=${CARTON_API_KEY:-production_secret_carton_token_2026}
       - WORKERS=1
       - TORCH_THREADS=4
-      - CONF_THRESHOLD=0.24
+      - CONF_THRESHOLD=0.15
+      - CARTON_CONSENSUS_THRESHOLD=0.25
       - IOU_THRESHOLD=0.45
+      - IMG_SIZE=640
       - FRAME_STRIDE=2
+      - MAX_UPLOAD_MB=500
       - JPEG_QUALITY=70
+      - VIDEO_SOURCE=output_videos/multi_angle_3angle_v2.mp4
+      - EVENT_STORE_DB_PATH=/app/data/carton_events.db
+      - CARTON_EVENTS_DB_PATH=/app/data/carton_events.db
+      - AUTHORITATIVE_INVENTORY_LOCKED=true
+      - CORS_ORIGIN=localhost,127.0.0.1
     volumes:
+      - carton_data:/app/data
       - carton_uploads:/app/uploads
       - ./apps/truck_loading_detection/output_videos:/app/output_videos
       - ./apps/truck_loading_detection/recorded_video:/app/recorded_video:ro
     restart: unless-stopped
+    stop_grace_period: 15s
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request,json; r=urllib.request.urlopen('http://localhost:5000/health'); d=json.load(r); exit(0 if d.get('status')=='healthy' and d.get('models_valid') else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 25s
 
   # App 2: Helmet / PPE Safety Compliance Detection
   helmet_detection:
@@ -83,7 +107,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  carton_uploads:
+  carton_data:        # persistent SQLite event store + audit records (carton_counter)
+  carton_uploads:     # uploaded video files
   face_auth_data:
   face_auth_deepface:
   face_auth_certs:
