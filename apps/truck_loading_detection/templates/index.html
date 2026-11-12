@@ -580,6 +580,42 @@
             transform: translateX(2px);
         }
 
+        /* Truck Side Toggle per Camera */
+        .truck-side-toggle {
+            display: inline-flex;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 2px;
+            gap: 2px;
+            font-size: 0.72rem;
+        }
+
+        .truck-side-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-family: var(--font-display);
+            font-weight: 600;
+            padding: 0.35rem 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+        }
+
+        .truck-side-btn.active {
+            background: rgba(14, 165, 233, 0.2);
+            color: #38bdf8;
+            border: 1px solid rgba(14, 165, 238, 0.35);
+            box-shadow: 0 0 8px rgba(14, 165, 233, 0.2);
+        }
+
+        .truck-side-btn.truck-left { color: #f59e0b; }
+        .truck-side-btn.truck-left.active { color: #fbbf24; background: rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.35); box-shadow: 0 0 8px rgba(245, 158, 11, 0.2); }
+        .truck-side-btn.truck-right { color: #10b981; }
+        .truck-side-btn.truck-right.active { color: #34d399; background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.35); box-shadow: 0 0 8px rgba(16, 185, 129, 0.2); }
+
         .segmented-toggle {
             display: inline-flex;
             background: rgba(0, 0, 0, 0.4);
@@ -1313,8 +1349,16 @@
                     <!-- Top Camera Tile -->
                     <article class="camera-card" id="cardTop">
                         <div class="camera-card-header">
-                            <div style="display: flex; align-items: center; gap: 0.45rem;">
+                            <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;">
                                 <span class="cam-name-text">Top Camera</span>
+                                <div class="truck-side-toggle" id="truckSideTop">
+                                    <button class="truck-side-btn truck-left active" id="tsTopLeft" onclick="TripwireController.setTruckSide('top', 'left', event)" title="Truck on Left ←">
+                                        ← Left
+                                    </button>
+                                    <button class="truck-side-btn truck-right" id="tsTopRight" onclick="TripwireController.setTruckSide('top', 'right', event)" title="Truck on Right →">
+                                        Right →
+                                    </button>
+                                </div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 0.35rem;">
                                 <button class="tripwire-toggle-btn" id="twToggleTop" onclick="TripwireController.toggleOrientation('top', event)" title="Rotate red line" aria-label="Rotate top camera red line">
@@ -1356,8 +1400,16 @@
                     <!-- Side Camera Tile -->
                     <article class="camera-card" id="cardSide">
                         <div class="camera-card-header">
-                            <div style="display: flex; align-items: center; gap: 0.45rem;">
+                            <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;">
                                 <span class="cam-name-text">Side Camera</span>
+                                <div class="truck-side-toggle" id="truckSideSide">
+                                    <button class="truck-side-btn truck-left active" id="tsSideLeft" onclick="TripwireController.setTruckSide('side', 'left', event)" title="Truck on Left ←">
+                                        ← Left
+                                    </button>
+                                    <button class="truck-side-btn truck-right" id="tsSideRight" onclick="TripwireController.setTruckSide('side', 'right', event)" title="Truck on Right →">
+                                        Right →
+                                    </button>
+                                </div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 0.35rem;">
                                 <button class="tripwire-toggle-btn" id="twToggleSide" onclick="TripwireController.toggleOrientation('side', event)" title="Rotate red line" aria-label="Rotate side camera red line">
@@ -1399,8 +1451,16 @@
                     <!-- Flank Camera Tile -->
                     <article class="camera-card" id="cardFlank">
                         <div class="camera-card-header">
-                            <div style="display: flex; align-items: center; gap: 0.45rem;">
+                            <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;">
                                 <span class="cam-name-text">Flank Camera</span>
+                                <div class="truck-side-toggle" id="truckSideFlank">
+                                    <button class="truck-side-btn truck-left" id="tsFlankLeft" onclick="TripwireController.setTruckSide('flank', 'left', event)" title="Truck on Left ←">
+                                        ← Left
+                                    </button>
+                                    <button class="truck-side-btn truck-right active" id="tsFlankRight" onclick="TripwireController.setTruckSide('flank', 'right', event)" title="Truck on Right →">
+                                        Right →
+                                    </button>
+                                </div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 0.35rem;">
                                 <button class="tripwire-toggle-btn" id="twToggleFlank" onclick="TripwireController.toggleOrientation('flank', event)" title="Rotate red line" aria-label="Rotate flank camera red line">
@@ -1809,9 +1869,9 @@
     // Angle-Specific Tripwire Controller
     const TripwireController = {
         configs: {
-            top: { orientation: 'vertical', pos: 0.51 },
-            side: { orientation: 'vertical', pos: 0.52 },
-            flank: { orientation: 'vertical', pos: 0.63 },
+            top: { orientation: 'vertical', pos: 0.516, truck_side: 'left' },
+            side: { orientation: 'vertical', pos: 0.504, truck_side: 'left' },
+            flank: { orientation: 'vertical', pos: 0.55, truck_side: 'right' },
         },
         isDragging: false,
         dragCam: null,
@@ -1825,22 +1885,26 @@
                         if (data.tripwires.cam_top) {
                             this.configs.top = {
                                 orientation: data.tripwires.cam_top.orientation || 'vertical',
-                                pos: data.tripwires.cam_top.line_pos_frac !== undefined ? data.tripwires.cam_top.line_pos_frac : 0.51
+                                pos: data.tripwires.cam_top.line_pos_frac !== undefined ? data.tripwires.cam_top.line_pos_frac : 0.516,
+                                truck_side: data.tripwires.cam_top.truck_side || (data.tripwires.cam_top.direction_sign === -1 ? 'left' : 'right'),
                             };
                         }
                         if (data.tripwires.cam_side) {
                             this.configs.side = {
                                 orientation: data.tripwires.cam_side.orientation || 'vertical',
-                                pos: data.tripwires.cam_side.line_pos_frac !== undefined ? data.tripwires.cam_side.line_pos_frac : 0.52
+                                pos: data.tripwires.cam_side.line_pos_frac !== undefined ? data.tripwires.cam_side.line_pos_frac : 0.504,
+                                truck_side: data.tripwires.cam_side.truck_side || (data.tripwires.cam_side.direction_sign === -1 ? 'left' : 'right'),
                             };
                         }
                         if (data.tripwires.cam_flank) {
                             this.configs.flank = {
                                 orientation: data.tripwires.cam_flank.orientation || 'vertical',
-                                pos: data.tripwires.cam_flank.line_pos_frac !== undefined ? data.tripwires.cam_flank.line_pos_frac : 0.63
+                                pos: data.tripwires.cam_flank.line_pos_frac !== undefined ? data.tripwires.cam_flank.line_pos_frac : 0.55,
+                                truck_side: data.tripwires.cam_flank.truck_side || (data.tripwires.cam_flank.direction_sign === -1 ? 'left' : 'right'),
                             };
                         }
                     }
+                    this.applyTruckSideUI();
                     this.renderAll();
                 })
                 .catch(() => this.renderAll());
@@ -1871,6 +1935,32 @@
             cur.pos = 0.50;
             this.render(cam);
             this.save();
+        },
+
+        setTruckSide(cam, side, e) {
+            if (e) e.stopPropagation();
+            const cur = this.configs[cam];
+            cur.truck_side = side;
+            // direction_sign: -1 = truck on left (IN = right-to-left), +1 = truck on right (IN = left-to-right)
+            this.render(cam);
+            this.applyTruckSideUI();
+            this.save();
+        },
+
+        applyTruckSideUI() {
+            ['top', 'side', 'flank'].forEach(cam => {
+                const cur = this.configs[cam];
+                const leftBtn = document.getElementById('ts' + capitalize(cam) + 'Left');
+                const rightBtn = document.getElementById('ts' + capitalize(cam) + 'Right');
+                if (!leftBtn || !rightBtn) return;
+                if (cur.truck_side === 'left') {
+                    leftBtn.classList.add('active');
+                    rightBtn.classList.remove('active');
+                } else {
+                    rightBtn.classList.add('active');
+                    leftBtn.classList.remove('active');
+                }
+            });
         },
 
         reset(cam, e) {
@@ -1998,9 +2088,24 @@
 
         save() {
             const payload = {
-                cam_top: { orientation: this.configs.top.orientation, line_pos_frac: this.configs.top.pos },
-                cam_side: { orientation: this.configs.side.orientation, line_pos_frac: this.configs.side.pos },
-                cam_flank: { orientation: this.configs.flank.orientation, line_pos_frac: this.configs.flank.pos },
+                cam_top: {
+                    orientation: this.configs.top.orientation,
+                    line_pos_frac: this.configs.top.pos,
+                    truck_side: this.configs.top.truck_side,
+                    direction_sign: this.configs.top.truck_side === 'left' ? -1 : 1,
+                },
+                cam_side: {
+                    orientation: this.configs.side.orientation,
+                    line_pos_frac: this.configs.side.pos,
+                    truck_side: this.configs.side.truck_side,
+                    direction_sign: this.configs.side.truck_side === 'left' ? -1 : 1,
+                },
+                cam_flank: {
+                    orientation: this.configs.flank.orientation,
+                    line_pos_frac: this.configs.flank.pos,
+                    truck_side: this.configs.flank.truck_side,
+                    direction_sign: this.configs.flank.truck_side === 'left' ? -1 : 1,
+                },
             };
             fetch('/api/3angle/tripwires', {
                 method: 'POST',
@@ -2606,7 +2711,6 @@
                 conf_threshold: 0.15,
                 frame_stride: 2,
             };
-            const directions = { cam_top: -1, cam_side: 1, cam_flank: 1 };
             selectedCameras.forEach(([cameraId]) => {
                 const cam = cameraId.replace('cam_', '');
                 const config = TripwireController.configs[cam];
@@ -2614,7 +2718,8 @@
                     source: selectedVideos[cameraId],
                     orientation: config.orientation,
                     line_pos_frac: config.pos,
-                    direction_sign: directions[cameraId],
+                    truck_side: config.truck_side,
+                    direction_sign: config.truck_side === 'left' ? -1 : 1,
                 };
             });
 
@@ -3024,6 +3129,12 @@
                         top_line: TripwireController.configs.top.pos,
                         side_line: TripwireController.configs.side.pos,
                         flank_line: TripwireController.configs.flank.pos,
+                        top_truck_side: TripwireController.configs.top.truck_side,
+                        side_truck_side: TripwireController.configs.side.truck_side,
+                        flank_truck_side: TripwireController.configs.flank.truck_side,
+                        top_direction: TripwireController.configs.top.truck_side === 'left' ? -1 : 1,
+                        side_direction: TripwireController.configs.side.truck_side === 'left' ? -1 : 1,
+                        flank_direction: TripwireController.configs.flank.truck_side === 'left' ? -1 : 1,
                     })
                 });
                 const data = await res.json();
@@ -3081,9 +3192,9 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    cam_top: { source: top, orientation: TripwireController.configs.top.orientation, line_pos_frac: TripwireController.configs.top.pos },
-                    cam_side: { source: side, orientation: TripwireController.configs.side.orientation, line_pos_frac: TripwireController.configs.side.pos },
-                    cam_flank: { source: flank, orientation: TripwireController.configs.flank.orientation, line_pos_frac: TripwireController.configs.flank.pos }
+                    cam_top: { source: top, orientation: TripwireController.configs.top.orientation, line_pos_frac: TripwireController.configs.top.pos, truck_side: TripwireController.configs.top.truck_side, direction_sign: TripwireController.configs.top.truck_side === 'left' ? -1 : 1 },
+                    cam_side: { source: side, orientation: TripwireController.configs.side.orientation, line_pos_frac: TripwireController.configs.side.pos, truck_side: TripwireController.configs.side.truck_side, direction_sign: TripwireController.configs.side.truck_side === 'left' ? -1 : 1 },
+                    cam_flank: { source: flank, orientation: TripwireController.configs.flank.orientation, line_pos_frac: TripwireController.configs.flank.pos, truck_side: TripwireController.configs.flank.truck_side, direction_sign: TripwireController.configs.flank.truck_side === 'left' ? -1 : 1 }
                 })
             });
             const data = await res.json();

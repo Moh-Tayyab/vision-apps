@@ -4,19 +4,22 @@
       "orientation": "vertical",
       "line_pos_frac": 0.58,
       "direction_sign": -1,
-      "physically_verified": true
+      "physically_verified": true,
+      "truck_side": "left"
     },
     "cam_side": {
       "orientation": "vertical",
       "line_pos_frac": 0.42,
       "direction_sign": 1,
-      "physically_verified": true
+      "physically_verified": true,
+      "truck_side": "right"
     },
     "cam_flank": {
       "orientation": "vertical",
       "line_pos_frac": 0.55,
       "direction_sign": 1,
-      "physically_verified": true
+      "physically_verified": true,
+      "truck_side": "right"
     }
   }
 }

@@ -30,6 +30,7 @@ from ultralytics import YOLO
 from visualizer import LoadingVisualizer
 from model_pipeline.mask_refinement import CartonMaskRefiner
 from three_camera_system.pipeline import ThreeCameraCartonPipeline
+from three_camera_system.exact_carton_counter import ThreeCameraCartonCounter, SimpleTracker, CAMERA_IDS as THREE_CAM_IDS
 from three_camera_system.event_store import EventStore
 from three_camera_system.shadow_mode import ShadowModeManager
 from three_camera_system.live_cameras import (
@@ -397,14 +398,14 @@ class StreamState:
         self.tripwire_configs = persisted_tw or {
             "cam_top": {
                 "orientation": "vertical",
-                "line_pos_frac": 0.50,
+                "line_pos_frac": 0.516,
                 "direction_sign": -1,
                 "physically_verified": True,
             },
             "cam_side": {
                 "orientation": "vertical",
-                "line_pos_frac": 0.50,
-                "direction_sign": 1,
+                "line_pos_frac": 0.504,
+                "direction_sign": -1,
                 "physically_verified": True,
             },
             "cam_flank": {
@@ -414,6 +415,45 @@ class StreamState:
                 "physically_verified": True,
             },
         }
+        # --- Three-camera fused carton counter (truck_side configurable per camera) ---
+        tw_truck_sides = {}
+        for cid, tc in self.tripwire_configs.items():
+            # direction_sign: -1 means right-to-left IN (truck on left), +1 means left-to-right IN (truck on right)
+            ds = int(tc.get("direction_sign", 1))
+            tw_truck_sides[cid] = "left" if ds == -1 else "right"
+        self.carton_counter_3cam = ThreeCameraCartonCounter(
+            camera_ids=tuple(THREE_CAM_IDS),
+            fusion_window_sec=1.5,
+            line_x=int(self.video_width * 0.5),
+            line_y=int(self.video_height * 0.5),
+            orientation="vertical",
+            hysteresis=15,
+            cooldown_frames=15,
+            min_displacement_px=15,
+            truck_sides=tw_truck_sides,
+            min_confidence_for_count=0.25,
+            min_track_observations=2,
+            track_reid_window_frames=15,
+            track_reid_max_dist_px=100.0,
+            max_position_diff_frac=0.30,
+        )
+        # Apply per-camera line fractions from tripwire config
+        for cid in THREE_CAM_IDS:
+            if cid in self.tripwire_configs:
+                lp = float(self.tripwire_configs[cid].get("line_pos_frac", 0.50))
+                self.carton_counter_3cam.set_line_frac(cid, lp, int(self.video_width), int(self.video_height), "vertical")
+                # Re-apply truck side direction after line set
+                ds = int(self.tripwire_configs[cid].get("direction_sign", 1))
+                side = "left" if ds == -1 else "right"
+                self.carton_counter_3cam.set_truck_side(cid, side)
+        # --- Per-camera simple trackers (replaces ByteTrack persist=True across panels) ---
+        self.simple_trackers: Dict[str, SimpleTracker] = {}
+        for cid in THREE_CAM_IDS:
+            self.simple_trackers[cid] = SimpleTracker(
+                camera_id=cid,
+                max_center_dist_px=80.0,
+                max_invisible_frames=10,
+            )
         self.pallet_scale_checker = PalletScaleCrossChecker()
         self.pallet_scale_telemetry = None
 
@@ -898,6 +938,217 @@ def processing_loop():
             time.sleep(0.05)
 
     logger.info("Processing loop shut down cleanly.")
+
+
+# ---------------------------------------------------------------------------
+# Background Processing Loop — Three-Camera Unified Counting
+# Handles both live RTSP/USB cameras and recorded 3-angle sources.
+# Each camera runs an independent tripwire counter; events fuse across cameras
+# within fusion_window_sec so each physical carton is counted exactly once.
+# ---------------------------------------------------------------------------
+def processing_loop_3cam():
+    frame_idx_3cam = 0
+    while not shutdown_event.is_set():
+        try:
+            live_status = live_camera_manager.status()
+            live_active = live_status["active"]
+            if not state.is_multi_angle and not live_active:
+                time.sleep(0.05)
+                continue
+
+            t_start = time.time()
+            frames_3cam: Dict[str, Optional[np.ndarray]] = {}
+            cur_time_sec = 0.0
+
+            # --- Acquire 3 synchronized frames ---
+            if live_active:
+                synced = live_camera_manager.get_synchronized_triplet(max_jitter_sec=0.150)
+                if synced is None:
+                    time.sleep(0.01)
+                    continue
+                ref_time, frame_dict = synced
+                frames_3cam = frame_dict
+                cur_time_sec = float(ref_time)
+                frame_idx_3cam += 1
+            elif state.cap is not None and state.cap.isOpened():
+                # Composite 3-angle video: split into 3 vertical panels
+                ret, frame = state.cap.read()
+                if not ret:
+                    if state.loop_video:
+                        state.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        state.frame_idx = 0
+                        state.carton_counter_3cam.reset()
+                        if hasattr(state, "simple_trackers"):
+                            for tracker in state.simple_trackers.values():
+                                tracker.reset()
+                        continue
+                    else:
+                        time.sleep(0.05)
+                        continue
+                # Crop burned-in banner if present
+                if frame.shape[0] >= 500 and frame.shape[1] >= 1500:
+                    frame = frame[70:, :]
+                h, w = frame.shape[:2]
+                panel_w = max(1, w // 3)
+                frames_3cam = {
+                    "cam_top": frame[:, 0:panel_w],
+                    "cam_side": frame[:, panel_w:2 * panel_w],
+                    "cam_flank": frame[:, 2 * panel_w:3 * panel_w],
+                }
+                cur_time_sec = frame_idx_3cam / max(state.fps, 1.0)
+                frame_idx_3cam += 1
+            else:
+                time.sleep(0.05)
+                continue
+
+            # --- Detect cartons on each camera frame ---
+            tracked_per_cam: Dict[str, List[Tuple[int, Tuple[float, float, float, float], str, float]]] = {}
+            for cid in THREE_CAM_IDS:
+                cam_frame = frames_3cam.get(cid)
+                if cam_frame is None or not isinstance(cam_frame, np.ndarray) or cam_frame.size == 0:
+                    tracked_per_cam[cid] = []
+                    continue
+                # Resize to standard processing size
+                proc_frame = cv2.resize(cam_frame, (state.video_width, state.video_height), interpolation=cv2.INTER_LINEAR)
+                try:
+                    # Use predict() (detection only) instead of track(persist=True).
+                    # ByteTrack persist=True cannot be shared across camera panels
+                    # called sequentially — it treats panel 2 as "next frame" after panel 1,
+                    # corrupting track IDs across cameras. We use our own SimpleTracker
+                    # for stable per-camera track IDs.
+                    res_c = state.carton_model.predict(
+                        proc_frame,
+                        conf=state.conf,
+                        iou=state.iou,
+                        imgsz=state.img_size,
+                        verbose=False,
+                    )
+                    raw_detections: List[Tuple[float, float, float, float, float]] = []
+                    if res_c and res_c[0].boxes is not None:
+                        boxes_c = res_c[0].boxes.xyxy.cpu().numpy()
+                        confs_c = res_c[0].boxes.conf.cpu().numpy()
+                        for box, conf in zip(boxes_c, confs_c):
+                            x1, y1, x2, y2 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+                            raw_detections.append((x1, y1, x2, y2, float(conf)))
+
+                    # Match detections to stable per-camera tracks
+                    tracker = state.simple_trackers.get(cid)
+                    if tracker is not None:
+                        tracked = tracker.update(raw_detections)
+                    else:
+                        tracked = [(i, d[:4], d[4]) for i, d in enumerate(raw_detections)]
+
+                    tracked_objects = [
+                        (int(tid), tuple(box), "carton", float(conf))
+                        for tid, box, conf in tracked
+                    ]
+                    tracked_per_cam[cid] = tracked_objects
+                except Exception as e:
+                    logger.debug("3cam carton detect error for %s: %s", cid, e)
+                    tracked_per_cam[cid] = []
+
+            # --- Update 3-cam counter per camera & fuse ---
+            with lock:
+                for cid in THREE_CAM_IDS:
+                    if tracked_per_cam.get(cid):
+                        state.carton_counter_3cam.update_camera(
+                            cid, tracked_per_cam[cid], frame_idx_3cam, frame=frames_3cam.get(cid)
+                        )
+
+                # --- Build composite visualization with per-camera tripwires ---
+                panels = []
+                for cid in THREE_CAM_IDS:
+                    cam_frame = frames_3cam.get(cid)
+                    if cam_frame is None or not isinstance(cam_frame, np.ndarray):
+                        pane = np.zeros((state.video_height, state.video_width, 3), dtype=np.uint8)
+                        pane[:] = (15, 20, 30)
+                        cv2.putText(pane, f"{cid.upper()} OFFLINE", (state.video_width // 4, state.video_height // 2),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (120, 120, 120), 2)
+                    else:
+                        pane = cv2.resize(cam_frame, (state.video_width, state.video_height), interpolation=cv2.INTER_LINEAR)
+                        # Get this camera's line position
+                        tw_cfg = state.tripwire_configs.get(cid, {})
+                        lp_frac = float(tw_cfg.get("line_pos_frac", 0.50))
+                        line_x = int(lp_frac * state.video_width)
+                        # Draw red tripwire
+                        overlay = pane.copy()
+                        cv2.line(overlay, (line_x, 0), (line_x, state.video_height), (0, 35, 140), 8)
+                        cv2.addWeighted(overlay, 0.45, pane, 0.55, 0, pane)
+                        cv2.line(pane, (line_x, 0), (line_x, state.video_height), (0, 0, 255), 2, cv2.LINE_AA)
+                        # Direction label
+                        truck_side = state.carton_counter_3cam.counters[cid].truck_side
+                        dir_text = f"TRUCK: {truck_side.upper()}"
+                        cv2.putText(pane, dir_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        cv2.putText(pane, f"LINE X={line_x}", (10, state.video_height - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+                    panels.append(pane)
+
+                composite = np.hstack(panels) if panels else None
+
+                # --- HUD with fused counts ---
+                counts = state.carton_counter_3cam.get_counts()
+                total_in = counts["total_in"]
+                total_out = counts["total_out"]
+                net_count = counts["net_count"]
+                cam_counts = counts.get("cameras", {})
+
+                if composite is not None:
+                    c_h, c_w = composite.shape[:2]
+                    panel_w_hud = 300
+                    panel_h_hud = 140
+                    px1, py1 = 15, 15
+                    px2, py2 = px1 + panel_w_hud, py1 + panel_h_hud
+                    sub = composite[py1:py2, px1:px2]
+                    if sub.shape[0] == panel_h_hud and sub.shape[1] == panel_w_hud:
+                        card = np.full_like(sub, (25, 28, 36))
+                        cv2.addWeighted(card, 0.85, sub, 0.15, 0, sub)
+                        composite[py1:py2, px1:px2] = sub
+                    cv2.rectangle(composite, (px1, py1), (px2, py2), (60, 70, 90), 1, cv2.LINE_AA)
+                    cv2.putText(composite, "3-CAM CARTON COUNTER", (px1 + 14, py1 + 24),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (245, 245, 245), 2, cv2.LINE_AA)
+                    cv2.line(composite, (px1 + 14, py1 + 32), (px2 - 14, py1 + 32), (60, 70, 90), 1)
+                    # Metrics
+                    cv2.putText(composite, "LOADED (+)", (px1 + 14, py1 + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                                (160, 165, 180), 1, cv2.LINE_AA)
+                    cv2.putText(composite, f"+{total_in}", (px1 + 14, py1 + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
+                                (72, 219, 90), 2, cv2.LINE_AA)
+                    cv2.putText(composite, "RETURN (-)", (px1 + 14 + 110, py1 + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                                (160, 165, 180), 1, cv2.LINE_AA)
+                    cv2.putText(composite, f"-{total_out}", (px1 + 14 + 110, py1 + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
+                                (50, 50, 240), 2, cv2.LINE_AA)
+                    cv2.putText(composite, "NET", (px1 + 14 + 220, py1 + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                                (160, 165, 180), 1, cv2.LINE_AA)
+                    cv2.putText(composite, f"{net_count}", (px1 + 14 + 220, py1 + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
+                                (245, 175, 35), 2, cv2.LINE_AA)
+                    # Per-camera mini counts
+                    y_off = py1 + 105
+                    for i, cid in enumerate(THREE_CAM_IDS):
+                        cc = cam_counts.get(cid, {})
+                        ci = cc.get("total_in", 0)
+                        co = cc.get("total_out", 0)
+                        cn = cc.get("net_count", 0)
+                        x_off = px1 + 14 + i * 95
+                        cv2.putText(composite, f"{cid}: +{ci}/-{co}={cn}", (x_off, y_off),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
+
+                    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+                    _, buffer = cv2.imencode(".jpg", composite, encode_param)
+                    state.current_frame_jpg = buffer.tobytes()
+
+                t_end = time.time()
+                frame_dt = max(t_end - t_start, 1e-4)
+                state.live_fps = 0.9 * state.live_fps + 0.1 * (1.0 / frame_dt)
+                target_fps = min(30.0, max(15.0, state.fps))
+
+            target_dt = 1.0 / max(target_fps, 10.0)
+            sleep_dt = target_dt - (time.time() - t_start)
+            if sleep_dt > 0:
+                time.sleep(sleep_dt)
+        except Exception as e:
+            logger.error("Processing loop 3cam error: %s\n%s", e, traceback.format_exc())
+            time.sleep(0.05)
+
+    logger.info("Processing loop 3cam shut down cleanly.")
 
 
 # ---------------------------------------------------------------------------
@@ -1402,19 +1653,22 @@ def api_stats():
         if live_status.get("active"):
             lc = live_status.get("live_counts", {})
             c_active = bool(live_status.get("counting_enabled") or live_status.get("counting_active"))
+            # Fused counts from the 3-camera counter (authoritative for live counting)
+            fused = state.carton_counter_3cam.get_counts() if hasattr(state, "carton_counter_3cam") else {}
             return jsonify({
                 "is_multi_angle": True,
                 "is_live": True,
                 "counting_enabled": c_active,
                 "counting_blocker": None if c_active else "Live camera preview active. Click 'Start live counting' to count cartons.",
-                "total_in": lc.get("loaded", 0),
-                "total_out": lc.get("returned", 0),
-                "net_count": lc.get("net", 0),
-                "confirmed_in": lc.get("confirmed_loaded", 0),
-                "confirmed_out": lc.get("confirmed_returned", 0),
-                "fps": lc.get("processing_fps", 0.0),
+                "total_in": fused.get("total_in", lc.get("loaded", 0)),
+                "total_out": fused.get("total_out", lc.get("returned", 0)),
+                "net_count": fused.get("net_count", lc.get("net", 0)),
+                "confirmed_in": fused.get("total_in", lc.get("confirmed_loaded", 0)),
+                "confirmed_out": fused.get("total_out", lc.get("confirmed_returned", 0)),
+                "fps": state.live_fps,
                 "connection_status": "live",
                 "cameras": live_status.get("cameras", {}),
+                "camera_counts": fused.get("cameras", {}),
                 "events": [],
             })
 
@@ -1542,6 +1796,14 @@ def api_stats():
             confirmed_in = sum(ev.get("fused_cartons") or ev.get("carton_count") or 1 for ev in active_events if ev.get("direction", "IN") == "IN" and is_confirmed(ev))
             confirmed_out = sum(ev.get("fused_cartons") or ev.get("carton_count") or 1 for ev in active_events if ev.get("direction") == "OUT" and is_confirmed(ev))
             net_cnt = confirmed_in - confirmed_out
+            # Override with fused 3-camera counter counts when available (authoritative)
+            if hasattr(state, "carton_counter_3cam"):
+                fused_counts = state.carton_counter_3cam.get_counts()
+                observed_in = fused_counts.get("total_in", observed_in)
+                observed_out = fused_counts.get("total_out", observed_out)
+                confirmed_in = fused_counts.get("total_in", confirmed_in)
+                confirmed_out = fused_counts.get("total_out", confirmed_out)
+                net_cnt = fused_counts.get("net_count", net_cnt)
             trips_in = sum(1 for ev in active_events if ev.get("direction", "IN") == "IN")
             recent_events = list(active_events)
             recent_events.reverse()
@@ -1820,6 +2082,11 @@ def api_toggle_loop():
 def api_reset():
     with lock:
         state.counter.reset_counts()
+        if hasattr(state, "carton_counter_3cam"):
+            state.carton_counter_3cam.reset()
+        if hasattr(state, "simple_trackers"):
+            for tracker in state.simple_trackers.values():
+                tracker.reset()
         if state.cap is not None:
             ret = state.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             if not ret:
@@ -1876,6 +2143,18 @@ def api_set_source():
         state.is_multi_angle = False
         state.source = validated_src
         state.counter.reset_counts()
+        if hasattr(state, "carton_counter_3cam"):
+            state.carton_counter_3cam.reset()
+            # Re-apply per-camera tripwire config (line fractions + truck sides)
+            for cid in THREE_CAM_IDS:
+                if cid in state.tripwire_configs:
+                    lp = float(state.tripwire_configs[cid].get("line_pos_frac", 0.50))
+                    state.carton_counter_3cam.set_line_frac(
+                        cid, lp, state.video_width, state.video_height, "vertical"
+                    )
+                    ds = int(state.tripwire_configs[cid].get("direction_sign", 1))
+                    side = "left" if ds == -1 else "right"
+                    state.carton_counter_3cam.set_truck_side(cid, side)
         state.init_capture()
     logger.info("Source changed to: %s", validated_src or "(none)")
     return jsonify({"success": True, "source": str(state.source), "connection_status": state.connection_status})
@@ -2950,6 +3229,16 @@ def api_3angle_tripwires():
                         cur["orientation"] = str(c_dict["orientation"]).lower()
                     if "line_pos_frac" in c_dict:
                         cur["line_pos_frac"] = max(0.05, min(0.95, float(c_dict["line_pos_frac"])))
+                    if "truck_side" in c_dict:
+                        cur["direction_sign"] = -1 if str(c_dict["truck_side"]).lower() == "left" else 1
+                        cur["truck_side"] = str(c_dict["truck_side"]).lower()
+                        if hasattr(state, "carton_counter_3cam"):
+                            state.carton_counter_3cam.set_truck_side(cam_id, cur["truck_side"])
+                    if hasattr(state, "carton_counter_3cam") and "line_pos_frac" in c_dict:
+                        lp = float(cur.get("line_pos_frac", 0.50))
+                        state.carton_counter_3cam.set_line_frac(
+                            cam_id, lp, state.video_width, state.video_height, "vertical"
+                        )
         logger.info("Tripwire configurations updated: %s", state.tripwire_configs)
         tw_path = Path(__file__).resolve().parent / "config" / "tripwires.json"
         try:
@@ -3123,27 +3412,58 @@ def api_live_cameras_start_counting():
     conf_thresh = float(data.get("conf_threshold", 0.15))
     target_fps = float(data.get("target_fps", 15.0))
     tw_cfgs = {}
+    truck_sides = {}
     for cid in CAMERA_IDS:
         cam_short = cid.replace("cam_", "")
         pos = float(data.get(f"{cam_short}_line", 0.5))
+        ds = int(data.get(f"{cam_short}_direction", -1 if cid == "cam_top" else 1))
+        # Explicit truck_side override if provided
+        truck_side = data.get(f"{cam_short}_truck_side")
+        if truck_side is not None:
+            truck_side = str(truck_side).lower()
+        else:
+            truck_side = "left" if ds == -1 else "right"
         tw_cfgs[cid] = {
             "orientation": "vertical",
             "line_pos_frac": pos,
-            "direction_sign": -1 if cid == "cam_top" else 1,
+            "direction_sign": ds,
+            "truck_side": truck_side,
+            "physically_verified": False,
         }
-    live_pipeline = ThreeCameraCartonPipeline(
-        camera_ids=CAMERA_IDS,
-        fps=30.0,
-        conf_threshold=conf_thresh,
-        tripwire_x_px=500.0,
-        required_direction=str(data.get("direction", "IN")).upper(),
-        tripwire_configs=tw_cfgs,
-        require_calibrated_fusion=False,
-        allow_temporal_video_fusion=True,
-    )
-    live_camera_manager.start_counting(live_pipeline, target_fps=target_fps)
+        truck_sides[cid] = truck_side
+
     with lock:
+        state.is_multi_angle = True
         state.is_paused = False
+        state.tripwire_configs = tw_cfgs
+        # Initialize/re-init the fused 3-camera counter for live counting
+        if hasattr(state, "carton_counter_3cam"):
+            state.carton_counter_3cam.reset()
+            for cid in CAMERA_IDS:
+                lp = float(tw_cfgs[cid].get("line_pos_frac", 0.50))
+                state.carton_counter_3cam.set_line_frac(
+                    cid, lp, state.video_width, state.video_height, "vertical"
+                )
+                state.carton_counter_3cam.set_truck_side(cid, truck_sides[cid])
+
+    # Start camera capture threads if not already running
+    live_status = live_camera_manager.status()
+    if not live_status.get("active"):
+        # Build sources from request data if provided
+        sources = {}
+        for cid in CAMERA_IDS:
+            val = data.get(cid, "")
+            if isinstance(val, dict):
+                val = val.get("source", "")
+            if val:
+                sources[cid] = val
+        if sources:
+            try:
+                parsed = {cid: parse_camera_source(str(sources[cid]), cid) for cid in sources}
+                live_camera_manager.start(parsed)
+            except Exception as e:
+                logger.warning("Could not start live camera sources: %s", e)
+
     return jsonify({
         "status": "ok",
         "success": True,
@@ -3846,6 +4166,10 @@ def handle_413(e):
 _processing_thread = threading.Thread(target=processing_loop, daemon=True)
 _processing_thread.start()
 logger.info("Background processing thread started.")
+
+_processing_thread_3cam = threading.Thread(target=processing_loop_3cam, daemon=True)
+_processing_thread_3cam.start()
+logger.info("Background 3-camera processing thread started.")
 
 def _auto_connect_default_live_cameras():
     time.sleep(1.0)
