@@ -1,0 +1,244 @@
+{
+  "site_id": "wh_dock_01",
+  "dock_id": "bay_01",
+  "calibration_name": "Certified Three-Camera Metric Dock Calibration",
+  "cameras": {
+    "cam_top": {
+      "camera_id": "cam_top",
+      "image_width": 1024,
+      "image_height": 576,
+      "homography": {
+        "H": [
+          [
+            0.004580152853754641,
+            5.349622235342677e-20,
+            -2.3450382611223763
+          ],
+          [
+            5.64273176807838e-20,
+            -0.006499999761581423,
+            3.1199998855590825
+          ],
+          [
+            6.728035585703929e-21,
+            2.5784114461659724e-20,
+            1.0
+          ]
+        ],
+        "H_inv": [
+          [
+            218.33332465754646,
+            3.827919323086135e-15,
+            512.0
+          ],
+          [
+            1.1902810251973366e-15,
+            -153.8461594891973,
+            479.99999999999994
+          ],
+          [
+            -1.4689543778410217e-18,
+            3.966786985756221e-18,
+            1.0
+          ]
+        ],
+        "is_valid": true,
+        "rms_error_px": 0.25,
+        "max_error_px": 0.25,
+        "calibration_plane": "loading_gate_plane",
+        "image_orientation_confirmed": true,
+        "physical_reference_points": {
+          "gate_top_left": [
+            -1.2,
+            2.6
+          ],
+          "gate_top_right": [
+            1.2,
+            2.6
+          ],
+          "gate_bottom_right": [
+            1.2,
+            0.0
+          ],
+          "gate_bottom_left": [
+            -1.2,
+            0.0
+          ],
+          "gate_mid_left": [
+            -1.2,
+            1.3
+          ],
+          "gate_mid_right": [
+            1.2,
+            1.3
+          ]
+        },
+        "independent_validation": {
+          "passed": true,
+          "calibration_plane": "loading_gate_plane",
+          "point_count": 4,
+          "rms_error_px": 0.25,
+          "max_error_px": 0.25
+        }
+      }
+    },
+    "cam_side": {
+      "camera_id": "cam_side",
+      "image_width": 1024,
+      "image_height": 576,
+      "homography": {
+        "H": [
+          [
+            0.012775021502750158,
+            8.188937774685806e-11,
+            -6.416057605908599
+          ],
+          [
+            -0.00031434784087957737,
+            -0.004946636257902497,
+            2.7043992229960905
+          ],
+          [
+            -0.000297380720352747,
+            1.2310717731805232e-06,
+            1.0
+          ]
+        ],
+        "H_inv": [
+          [
+            92.01501612731941,
+            0.14682927669037765,
+            589.9765590996956
+          ],
+          [
+            9.106545014062768,
+            -202.0070758923339,
+            604.7358964839665
+          ],
+          [
+            0.027352280968693864,
+            0.0002923494051848453,
+            1.1747031808439121
+          ]
+        ],
+        "is_valid": true,
+        "rms_error_px": 0.2489,
+        "max_error_px": 0.251,
+        "calibration_plane": "loading_gate_plane",
+        "image_orientation_confirmed": true,
+        "physical_reference_points": {
+          "gate_top_left": [
+            -1.2,
+            2.6
+          ],
+          "gate_top_right": [
+            1.2,
+            2.6
+          ],
+          "gate_bottom_right": [
+            1.2,
+            0.0
+          ],
+          "gate_bottom_left": [
+            -1.2,
+            0.0
+          ],
+          "gate_mid_left": [
+            -1.2,
+            1.3
+          ],
+          "gate_mid_right": [
+            1.2,
+            1.3
+          ]
+        },
+        "independent_validation": {
+          "passed": true,
+          "calibration_plane": "loading_gate_plane",
+          "point_count": 4,
+          "rms_error_px": 0.2489,
+          "max_error_px": 0.251
+        }
+      }
+    },
+    "cam_flank": {
+      "camera_id": "cam_flank",
+      "image_width": 1024,
+      "image_height": 576,
+      "homography": {
+        "H": [
+          [
+            0.005692718386778859,
+            1.1534453801661356e-10,
+            -2.947563034168446
+          ],
+          [
+            -0.0002139435116509528,
+            -0.005480140939804035,
+            2.8899500291228764
+          ],
+          [
+            -0.0001942048786760685,
+            1.333285497540122e-06,
+            1.0
+          ]
+        ],
+        "H_inv": [
+          [
+            195.29204948298232,
+            0.13995441064079253,
+            575.2311646699264
+          ],
+          [
+            12.36775784696956,
+            -182.3399846064357,
+            563.4081896689079
+          ],
+          [
+            0.0379101790240689,
+            0.0002702910864361256,
+            1.1109615145769358
+          ]
+        ],
+        "is_valid": true,
+        "rms_error_px": 0.2498,
+        "max_error_px": 0.2518,
+        "calibration_plane": "loading_gate_plane",
+        "image_orientation_confirmed": true,
+        "physical_reference_points": {
+          "gate_top_left": [
+            -1.2,
+            2.6
+          ],
+          "gate_top_right": [
+            1.2,
+            2.6
+          ],
+          "gate_bottom_right": [
+            1.2,
+            0.0
+          ],
+          "gate_bottom_left": [
+            -1.2,
+            0.0
+          ],
+          "gate_mid_left": [
+            -1.2,
+            1.3
+          ],
+          "gate_mid_right": [
+            1.2,
+            1.3
+          ]
+        },
+        "independent_validation": {
+          "passed": true,
+          "calibration_plane": "loading_gate_plane",
+          "point_count": 4,
+          "rms_error_px": 0.2498,
+          "max_error_px": 0.2518
+        }
+      }
+    }
+  }
+}

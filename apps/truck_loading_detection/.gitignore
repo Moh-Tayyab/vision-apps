@@ -35,5 +35,8 @@ __pycache__/
 *.py[cod]
 *.log
 
-config/
+# Per-site tripwire positions stay local, but the certified calibration is shipped.
+config/*
+!config/calibrations/
+!config/calibrations/*.json
 

@@ -92,7 +92,10 @@ CARTON_COUNT_*.md
 output_videos/
 **/output_videos/
 config/
-**/config/
+**/config/*
+!apps/truck_loading_detection/config/
+!apps/truck_loading_detection/config/calibrations/
+!apps/truck_loading_detection/config/calibrations/*.json
 *.json
 !package*.json
 !tsconfig*.json
