@@ -150,7 +150,7 @@ class ThreeCameraCartonPipeline:
         fusion_window: float = 1.0,
         min_consensus_cams: int = 2,
         device: Optional[str] = None,
-        imgsz: int = 640,
+        imgsz: int = 384,
         **kwargs,
     ) -> None:
         self.camera_ids = tuple(camera_ids)
@@ -254,6 +254,12 @@ class ThreeCameraCartonPipeline:
         self.time_window_sec: float = 2.4  # Canonical multi-camera physical transit association window
         self.single_camera_commit_delay_sec: float = float(
             kwargs.get("single_camera_commit_delay_sec", 1.80)
+        )
+        # A two-camera window waits this long for the third view before it is
+        # committed, so a slightly late third observation still corroborates
+        # the same physical carton.
+        self.third_camera_wait_sec: float = float(
+            kwargs.get("third_camera_wait_sec", 0.45)
         )
         self._active_crossing_windows: List[CrossingWindow] = []
         self._next_window_id: int = 1
@@ -384,11 +390,15 @@ class ThreeCameraCartonPipeline:
         closing_windows = [
             w for w in self._active_crossing_windows
             if not w.committed and (
-                # Instant Multi-Camera Agreement:
-                # Multi-camera agreements commit within 1-2 frames (0.05s);
+                # Instant Three-Camera Agreement:
+                # All three views commit within 1-2 frames (0.05s).
+                # Two-camera agreement waits briefly for the third view, otherwise a
+                # late third observation lands in a separate window and the event
+                # is scored as a two-camera agreement instead of a unanimous one.
                 # Single-camera observations wait for the physical transit time so a
                 # secondary corridor view of the same carton can still corroborate it.
-                (len(w.local_events) >= 2 and (global_t - w.last_time) >= 0.05)
+                (len(w.local_events) >= 3 and (global_t - w.last_time) >= 0.05)
+                or (len(w.local_events) == 2 and (global_t - w.last_time) >= self.third_camera_wait_sec)
                 or (global_t - w.last_time) >= self.single_camera_commit_delay_sec
                 or (global_t - w.start_time) >= self.time_window_sec
             )

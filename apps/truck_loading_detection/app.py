@@ -90,6 +90,11 @@ class CartonTripwireCounter:
     def net_count(self) -> int:
         return self.total_in - self.total_out
 
+    @property
+    def active_associations(self) -> int:
+        """Number of carton tracks the single-camera counter is currently following."""
+        return len(self.track_history)
+
     def set_line_x(self, line_x: int):
         self.line_x = int(line_x)
 
@@ -252,7 +257,7 @@ TORCH_THREADS = int(os.environ.get("TORCH_THREADS", 4))
 CONF = float(os.environ.get("CONF_THRESHOLD", 0.15))
 CONSENSUS_THRESHOLD = float(os.environ.get("CARTON_CONSENSUS_THRESHOLD", 0.25))
 IOU = float(os.environ.get("IOU_THRESHOLD", 0.45))
-IMG_SIZE = int(os.environ.get("IMG_SIZE", 640))
+IMG_SIZE = int(os.environ.get("IMG_SIZE", 384))
 FRAME_STRIDE = int(os.environ.get("FRAME_STRIDE", 2))
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 500))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", 70))
@@ -680,7 +685,7 @@ live_camera_manager = LiveCameraManager()
 FROZEN_MODELS = {
     "best.pt": {
         "path": os.path.join(_app_dir, "best.pt"),
-        "sha256": "c4c6c951ed2f00c15a10a9f6c471f1f69501312f7aa493b06148703853913a55",
+        "sha256": "98c6164c83905feb9db6d9bee6f48ab239c5d68a00efbe0484dbf3448333ad33",
         "purpose": "Canonical Carton Detector",
     }
 }

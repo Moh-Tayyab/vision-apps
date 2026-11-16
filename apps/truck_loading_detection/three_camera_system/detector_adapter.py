@@ -80,7 +80,7 @@ class CartonDetectorAdapter:
         model_path: str,
         conf_threshold: float = 0.25,
         iou_threshold: float = 0.45,
-        imgsz: int = 640,
+        imgsz: int = 384,
         device: str = "cpu",
         preferred_profile: str = "auto",
         worker_model_path: Optional[str] = None,
