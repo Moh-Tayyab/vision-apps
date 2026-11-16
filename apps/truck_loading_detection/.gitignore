@@ -35,8 +35,5 @@ __pycache__/
 *.py[cod]
 *.log
 
-# Allow configuration JSON files
-!config/**/*.json
-!config/*.json
-config/accuracy_baseline_report.json
+config/
 

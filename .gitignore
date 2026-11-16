@@ -91,12 +91,11 @@ scratch/
 CARTON_COUNT_*.md
 output_videos/
 **/output_videos/
+config/
+**/config/
 *.json
 !package*.json
 !tsconfig*.json
-!apps/truck_loading_detection/config/**/*.json
-!apps/truck_loading_detection/config/*.json
-apps/truck_loading_detection/config/accuracy_baseline_report.json
 !data/ground_truth/*.json
 !data/ground_truth/*.csv
 
