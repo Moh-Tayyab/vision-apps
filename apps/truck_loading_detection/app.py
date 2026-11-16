@@ -2042,7 +2042,7 @@ def api_stats():
             "connection_status": state.connection_status,
             "reconnect_attempts": state.reconnect_attempts,
             "count_mode": state.count_mode,
-            "active_associations": state.counter.current_associations,
+            "active_associations": state.counter.active_associations,
             "events": formatted_single_events,
             "conf": round(state.conf, 2),
             "hysteresis": state.counter.hysteresis,

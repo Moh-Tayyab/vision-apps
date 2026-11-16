@@ -26,6 +26,7 @@ if _app_root not in sys.path:
     sys.path.insert(0, _app_root)
 
 from app import app, get_app_event_store
+from app import state as app_state
 from app import infer_camera_slot_from_filename
 from three_camera_system.security import CONFIGURED_API_KEYS, DEFAULT_FALLBACK_KEY
 
@@ -216,3 +217,26 @@ class TestCameraSlotLabelGuard:
 
         assert videos["side_scenario2_top_synced.mp4"]["camera"] == "cam_top"
         assert videos["top_scenario1_side_synced.mp4"]["camera"] == "cam_side"
+
+
+class TestStatsEndpointContract:
+    """/api/stats drives the standby HUD.
+
+    It must answer 200 in every mode: the frontend polls it continuously, so a
+    missing attribute on the counter turns the whole stats panel into a 500.
+    """
+
+    def test_stats_endpoint_returns_200_and_reports_active_associations(self, client):
+        resp = client.get("/api/stats")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        payload = resp.get_json()
+        assert "active_associations" in payload
+        assert isinstance(payload["active_associations"], int)
+
+    def test_counter_exposes_active_associations(self):
+        counter = app_state.counter
+
+        assert isinstance(counter.active_associations, int)
+        assert counter.active_associations >= 0
+        assert not hasattr(counter, "current_associations")
