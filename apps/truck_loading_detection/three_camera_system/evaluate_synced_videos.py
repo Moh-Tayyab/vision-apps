@@ -68,7 +68,7 @@ def run_evaluation(
 
     logger.info("Initializing ThreeCameraCartonPipeline with model: %s (conf: %.2f)", model_path, conf_threshold)
     tripwire_configs = {
-        "cam_side": {"direction_sign": 1, "line_pos_frac": 0.50},
+        "cam_side": {"direction_sign": -1, "line_pos_frac": 0.50},
         "cam_flank": {"direction_sign": 1, "line_pos_frac": 0.55},
         "cam_top": {"direction_sign": -1, "line_pos_frac": 0.50},
     }

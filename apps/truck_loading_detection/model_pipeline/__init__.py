@@ -55,12 +55,6 @@ from .shadow_mode import (
     ShadowEventRecord,
 )
 
-from .statistical_certifier import (
-    StatisticalCertifier,
-    ClopperPearsonResult,
-    compute_clopper_pearson_lower_bound,
-)
-
 from .dataset_validator import (
     DatasetValidator,
     DatasetQAReport,
@@ -92,9 +86,6 @@ __all__ = [
     "EngineBenchmarkResult",
     "ShadowModeAuditor",
     "ShadowEventRecord",
-    "StatisticalCertifier",
-    "ClopperPearsonResult",
-    "compute_clopper_pearson_lower_bound",
     "DatasetValidator",
     "DatasetQAReport",
 ]

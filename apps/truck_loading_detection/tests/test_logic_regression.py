@@ -173,6 +173,99 @@ class TestEvaluatorLogicRegression:
         assert "cam_side" not in flushed[0]["participating_cameras"]
         assert pipeline.confirmed_in == 1
 
+    def test_late_arriving_earlier_timestamp_is_same_carton(self):
+        """A camera crossing processed later but timestamped earlier is the same carton.
+
+        The multi-camera feed can deliver one camera's crossing after the shared
+        window was already committed, even though that crossing happened a
+        fraction of a second earlier. It must be absorbed into the committed
+        physical carton instead of being counted a second time.
+        """
+        pipeline = ThreeCameraCartonPipeline(
+            camera_ids=("cam_top", "cam_side", "cam_flank"),
+            conf_threshold=0.20,
+            require_calibrated_fusion=False,
+            allow_temporal_video_fusion=True,
+        )
+
+        def candidate(cam: str, tid: int, ts: float, name: str):
+            return LocalCameraCrossingCandidate(
+                local_event_id=name,
+                local_track_id=tid,
+                camera_id=cam,
+                timestamp_sec=ts,
+                observed_frame_idx=int(ts * 30),
+                direction="IN",
+                confidence=0.85,
+                bbox=(480.0, 100.0, 520.0, 200.0),
+                aspect_ratio=1.0,
+                crossing_line_px=500.0,
+                crossing_point_px=(500.0, 150.0),
+            )
+
+        pipeline._add_crossing_candidate_to_window(
+            candidate("cam_side", 2, 11.26, "side_w1"), arrival_time=11.26
+        )
+        pipeline._add_crossing_candidate_to_window(
+            candidate("cam_flank", 3, 11.24, "flank_w1"), arrival_time=11.24
+        )
+        first = pipeline.flush_pending_windows(current_time_sec=14.0)
+        assert len(first) == 1
+        assert pipeline.total_in == 1
+
+        pipeline._add_crossing_candidate_to_window(
+            candidate("cam_top", 1, 11.21, "top_w1"), arrival_time=11.40
+        )
+        pipeline.flush_pending_windows(current_time_sec=14.0)
+
+        assert pipeline.total_in == 1
+        assert len(pipeline.audit_events) == 1
+        assert pipeline.confirmed_in == 1
+
+    def test_distinct_cartons_outside_debounce_are_counted_separately(self):
+        """Two genuinely separate crossings must not be absorbed by the debounce."""
+        pipeline = ThreeCameraCartonPipeline(
+            camera_ids=("cam_top", "cam_side", "cam_flank"),
+            conf_threshold=0.20,
+            require_calibrated_fusion=False,
+            allow_temporal_video_fusion=True,
+        )
+
+        def candidate(cam: str, tid: int, ts: float, name: str):
+            return LocalCameraCrossingCandidate(
+                local_event_id=name,
+                local_track_id=tid,
+                camera_id=cam,
+                timestamp_sec=ts,
+                observed_frame_idx=int(ts * 30),
+                direction="IN",
+                confidence=0.85,
+                bbox=(480.0, 100.0, 520.0, 200.0),
+                aspect_ratio=1.0,
+                crossing_line_px=500.0,
+                crossing_point_px=(500.0, 150.0),
+            )
+
+        pipeline._add_crossing_candidate_to_window(
+            candidate("cam_side", 2, 1.0, "side_a"), arrival_time=1.0
+        )
+        pipeline._add_crossing_candidate_to_window(
+            candidate("cam_flank", 3, 1.1, "flank_a"), arrival_time=1.1
+        )
+        pipeline.flush_pending_windows(current_time_sec=4.0)
+        assert pipeline.total_in == 1
+
+        pipeline._add_crossing_candidate_to_window(
+            candidate("cam_side", 4, 3.0, "side_b"), arrival_time=3.0
+        )
+        pipeline._add_crossing_candidate_to_window(
+            candidate("cam_flank", 5, 3.1, "flank_b"), arrival_time=3.1
+        )
+        pipeline.flush_pending_windows(current_time_sec=6.0)
+
+        assert pipeline.total_in == 2
+        assert len(pipeline.audit_events) == 2
+
     def test_multi_camera_consensus_breakdown_metrics(self):
         """Consensus policy distinction between unanimous and single-camera observation."""
         pipeline = ThreeCameraCartonPipeline(
@@ -223,3 +316,244 @@ class TestEvaluatorLogicRegression:
         assert pipeline.review_required_in == 1
         assert pipeline.total_in == 2
 
+
+class TestWorkerFalsePositiveRejection:
+    """A carton-only model fires on worker clothing and limbs.
+
+    Those detections must never reach the counting logic, otherwise they are
+    stitched to a stale approach record and fabricate a phantom load event.
+    """
+
+    @staticmethod
+    def _rect_polygon(x1: int, y1: int, x2: int, y2: int) -> List[List[float]]:
+        return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
+    def test_low_confidence_mask_inside_worker_is_false_positive(self):
+        from model_pipeline.mask_refinement import CartonMaskRefiner
+
+        refiner = CartonMaskRefiner()
+        worker = self._rect_polygon(700, 0, 1200, 600)
+        clothing_mask = self._rect_polygon(850, 77, 1101, 378)
+
+        assert refiner.worker_false_positive(
+            raw_polygon=clothing_mask,
+            image_shape=(720, 1280),
+            worker_polygons=[worker],
+            confidence=0.15,
+        ) is True
+
+    def test_carton_only_partially_occluded_is_not_false_positive(self):
+        from model_pipeline.mask_refinement import CartonMaskRefiner
+
+        refiner = CartonMaskRefiner()
+        worker = self._rect_polygon(556, 0, 960, 544)
+        carton_mask = self._rect_polygon(873, 13, 1034, 214)
+
+        assert refiner.worker_false_positive(
+            raw_polygon=carton_mask,
+            image_shape=(720, 1280),
+            worker_polygons=[worker],
+            confidence=0.16,
+        ) is False
+
+    def test_high_confidence_overlap_is_not_false_positive(self):
+        from model_pipeline.mask_refinement import CartonMaskRefiner
+
+        refiner = CartonMaskRefiner()
+        worker = self._rect_polygon(700, 0, 1200, 600)
+        mask = self._rect_polygon(850, 77, 1101, 378)
+
+        assert refiner.worker_false_positive(
+            raw_polygon=mask,
+            image_shape=(720, 1280),
+            worker_polygons=[worker],
+            confidence=0.80,
+        ) is False
+
+    def test_adapter_drops_worker_false_positive_detection(self):
+        import numpy as np
+        import torch
+
+        from model_pipeline.mask_refinement import CartonMaskRefiner
+        from three_camera_system.detector_adapter import CartonDetectorAdapter
+
+        class _FakeBox:
+            def __init__(self, xyxy, conf):
+                self.xyxy = torch.tensor([xyxy], dtype=torch.float32)
+                self.conf = torch.tensor([conf], dtype=torch.float32)
+                self.cls = torch.tensor([0], dtype=torch.float32)
+
+        class _FakeMasks:
+            def __init__(self, polys):
+                self.xy = polys
+
+        class _FakeResult:
+            def __init__(self, xyxy, conf, polys):
+                self.boxes = [_FakeBox(xyxy, conf)]
+                self.masks = _FakeMasks(polys)
+
+        adapter = CartonDetectorAdapter.__new__(CartonDetectorAdapter)
+        adapter.refiner = CartonMaskRefiner()
+        adapter._names = {0: "carton"}
+        adapter._carton_class_ids = [0]
+
+        worker = np.array(self._rect_polygon(700, 0, 1200, 600), dtype=np.float32)
+        clothing = np.array(self._rect_polygon(850, 77, 1101, 378), dtype=np.float32)
+        result = _FakeResult([850.0, 77.0, 1101.0, 378.0], 0.15, [clothing])
+
+        detections = adapter._parse_results(
+            result,
+            "cam_flank",
+            0,
+            18.57,
+            1280,
+            720,
+            worker_polygons=[worker],
+        )
+
+        assert detections == []
+
+    def test_adapter_keeps_genuine_carton_detection(self):
+        import numpy as np
+        import torch
+
+        from model_pipeline.mask_refinement import CartonMaskRefiner
+        from three_camera_system.detector_adapter import CartonDetectorAdapter
+
+        class _FakeBox:
+            def __init__(self, xyxy, conf):
+                self.xyxy = torch.tensor([xyxy], dtype=torch.float32)
+                self.conf = torch.tensor([conf], dtype=torch.float32)
+                self.cls = torch.tensor([0], dtype=torch.float32)
+
+        class _FakeMasks:
+            def __init__(self, polys):
+                self.xy = polys
+
+        class _FakeResult:
+            def __init__(self, xyxy, conf, polys):
+                self.boxes = [_FakeBox(xyxy, conf)]
+                self.masks = _FakeMasks(polys)
+
+        adapter = CartonDetectorAdapter.__new__(CartonDetectorAdapter)
+        adapter.refiner = CartonMaskRefiner()
+        adapter._names = {0: "carton"}
+        adapter._carton_class_ids = [0]
+
+        worker = np.array(self._rect_polygon(556, 0, 960, 544), dtype=np.float32)
+        carton = np.array(self._rect_polygon(873, 13, 1034, 214), dtype=np.float32)
+        result = _FakeResult([873.0, 13.0, 1034.0, 214.0], 0.16, [carton])
+
+        detections = adapter._parse_results(
+            result,
+            "cam_flank",
+            0,
+            26.57,
+            1280,
+            720,
+            worker_polygons=[worker],
+        )
+
+        assert len(detections) == 1
+        assert detections[0].confidence == pytest.approx(0.16)
+
+
+
+class TestContentCropCoordinateMapping:
+    """Normalized videos pad a narrow camera into a wide canvas.
+
+    The padded frame starves the model input, so the visible content is
+    cropped before inference. Every coordinate must be mapped back to the
+    original full-frame space, otherwise tripwire geometry is invalidated.
+    """
+
+    @staticmethod
+    def _pillarboxed_frame() -> "np.ndarray":
+        import numpy as np
+
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        frame[:, 438:842] = 80
+        return frame
+
+    def test_crop_is_disabled_by_default(self):
+        from three_camera_system.detector_adapter import CartonDetectorAdapter
+
+        adapter = CartonDetectorAdapter.__new__(CartonDetectorAdapter)
+        adapter.enable_content_crop = False
+        adapter.content_crop_margin_px = 4
+        adapter.content_crop_min_coverage = 0.92
+
+        x0, x1 = adapter._content_crop(self._pillarboxed_frame())
+
+        assert (x0, x1) == (0, 1280)
+
+    def test_crop_selects_visible_content_strip(self):
+        from three_camera_system.detector_adapter import CartonDetectorAdapter
+
+        adapter = CartonDetectorAdapter.__new__(CartonDetectorAdapter)
+        adapter.enable_content_crop = True
+        adapter.content_crop_margin_px = 4
+        adapter.content_crop_min_coverage = 0.92
+
+        x0, x1 = adapter._content_crop(self._pillarboxed_frame())
+
+        assert x0 == 434
+        assert x1 == 846
+        assert (x1 - x0) < 1280
+
+    def test_parse_results_maps_boxes_back_to_full_frame(self):
+        import numpy as np
+        import torch
+
+        from model_pipeline.mask_refinement import CartonMaskRefiner
+        from three_camera_system.detector_adapter import CartonDetectorAdapter
+
+        class _FakeBox:
+            def __init__(self, xyxy, conf):
+                self.xyxy = torch.tensor([xyxy], dtype=torch.float32)
+                self.conf = torch.tensor([conf], dtype=torch.float32)
+                self.cls = torch.tensor([0], dtype=torch.float32)
+
+        class _FakeMasks:
+            def __init__(self, polys):
+                self.xy = polys
+
+        class _FakeResult:
+            def __init__(self, xyxy, conf, polys):
+                self.boxes = [_FakeBox(xyxy, conf)]
+                self.masks = _FakeMasks(polys)
+
+        adapter = CartonDetectorAdapter.__new__(CartonDetectorAdapter)
+        adapter.refiner = CartonMaskRefiner()
+        adapter._names = {0: "carton"}
+        adapter._carton_class_ids = [0]
+
+        # Box detected inside the cropped strip (crop origin x=434).
+        carton = np.array(
+            [[440, 10], [520, 10], [520, 90], [440, 90]], dtype=np.float32
+        )
+        result = _FakeResult([440.0, 10.0, 520.0, 90.0], 0.72, [carton])
+
+        detections = adapter._parse_results(
+            result,
+            "cam_top",
+            0,
+            1.0,
+            1280,
+            720,
+            x_offset=434,
+        )
+        unshifted = adapter._parse_results(
+            result,
+            "cam_top",
+            0,
+            1.0,
+            1280,
+            720,
+            x_offset=0,
+        )
+
+        assert len(detections) == 1
+        assert len(unshifted) == 1
+        assert detections[0].bbox[0] == pytest.approx(unshifted[0].bbox[0] + 434.0)
+        assert detections[0].bbox[2] == pytest.approx(unshifted[0].bbox[2] + 434.0)

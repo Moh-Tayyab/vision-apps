@@ -218,3 +218,46 @@ class TestThreeCameraFusion:
         assert cc.counters["cam_top"].line_x == 250
         cc.set_line_frac("cam_top", 0.75, 1000, 720, "vertical")
         assert cc.counters["cam_top"].line_x == 750
+
+    def test_cameras_with_different_line_positions_still_fuse(self):
+        """Cameras whose tripwires sit at different X must still fuse one carton.
+
+        Every crossing happens on that camera's own tripwire, so the offset from
+        each camera's own line is ~0. Comparing raw normalized X instead made
+        the per-camera line offset look like a position mismatch, which broke
+        fusion and double-counted a single physical carton.
+        """
+        cc = ThreeCameraCartonCounter(
+            truck_sides={"cam_top": "left", "cam_side": "left", "cam_flank": "left"},
+            line_x=500,
+        )
+        cc.set_frame_dims("cam_top", 1000, 720)
+        cc.set_frame_dims("cam_side", 1000, 720)
+        # cam_top line at 0.70 -> x=700 ; cam_side line at 0.30 -> x=300
+        cc.set_line_frac("cam_top", 0.70, 1000, 720, "vertical")
+        cc.set_line_frac("cam_side", 0.30, 1000, 720, "vertical")
+
+        # Same physical carton crosses each camera's own line in the same lane.
+        cc.update_camera("cam_top", [_make_track(1, 740, 300)], frame_idx=10)
+        cc.update_camera("cam_top", [_make_track(1, 660, 300)], frame_idx=11)
+        cc.update_camera("cam_side", [_make_track(2, 340, 300)], frame_idx=10)
+        cc.update_camera("cam_side", [_make_track(2, 260, 300)], frame_idx=11)
+
+        assert cc.total_in == 1, f"Expected total_in=1, got {cc.total_in}"
+
+    def test_different_lanes_do_not_fuse(self):
+        """Cartons crossing in different loading lanes must count separately."""
+        cc = ThreeCameraCartonCounter(
+            truck_sides={"cam_top": "left", "cam_side": "left", "cam_flank": "left"},
+            line_x=500,
+        )
+        cc.set_frame_dims("cam_top", 1000, 720)
+        cc.set_frame_dims("cam_side", 1000, 720)
+
+        cc.update_camera("cam_top", [_make_track(1, 550, 100)], frame_idx=10)
+        cc.update_camera("cam_top", [_make_track(1, 450, 100)], frame_idx=11)
+        # Same instant, but a clearly different lane (Y far apart)
+        cc.update_camera("cam_side", [_make_track(2, 550, 600)], frame_idx=10)
+        cc.update_camera("cam_side", [_make_track(2, 450, 600)], frame_idx=11)
+
+        assert cc.total_in == 2, f"Expected total_in=2, got {cc.total_in}"

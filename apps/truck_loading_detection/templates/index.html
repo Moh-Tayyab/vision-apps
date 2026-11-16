@@ -1983,7 +1983,14 @@
             const lineId = isFullscreen ? 'fsLine' : ('line' + capitalize(cam));
             const line = document.getElementById(lineId);
             if (line) line.classList.add('dragging');
-            this.onDragMove(e);
+            // Remember where the pointer went down and the tripwire position at
+            // that moment. The whole panel is the drag handle, so a plain click
+            // on the video must not move (and persist) the loading line.
+            const point = e.touches ? e.touches[0] : e;
+            this.dragStartX = point.clientX;
+            this.dragStartY = point.clientY;
+            this.dragStartPos = this.configs[cam] ? this.configs[cam].pos : null;
+            this.dragMoved = false;
         },
 
         onDragMove(e) {
@@ -1997,6 +2004,17 @@
             const rect = overlay.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            // Require actual pointer movement before treating the gesture as a
+            // tripwire drag. The threshold is deliberately large: the whole video
+            // panel is the drag handle, so a stray click with a few pixels of
+            // jitter would silently rewrite the calibrated loading line.
+            const movedPx = Math.max(
+                Math.abs(clientX - (this.dragStartX ?? clientX)),
+                Math.abs(clientY - (this.dragStartY ?? clientY))
+            );
+            if (!this.dragMoved && movedPx < 8) return;
+            this.dragMoved = true;
 
             const cfg = this.configs[cam];
             if (cfg.orientation === 'vertical') {
@@ -2015,7 +2033,18 @@
                 if (line) line.classList.remove('dragging');
                 const fsLine = document.getElementById('fsLine');
                 if (fsLine) fsLine.classList.remove('dragging');
-                this.save();
+                // Only persist when the tripwire actually moved.
+                const cfg = this.configs[this.dragCam];
+                if (this.dragMoved && cfg && cfg.pos !== this.dragStartPos) {
+                    this.save();
+                    if (typeof setCountingStatus === 'function') {
+                        const camName = capitalize(this.dragCam);
+                        setCountingStatus(
+                            `${camName} loading line moved to ${(cfg.pos * 100).toFixed(1)}% and saved. `
+                            + 'Select Start counting to recount with the new line.'
+                        );
+                    }
+                }
             }
             this.isDragging = false;
             this.dragCam = null;
@@ -2199,6 +2228,7 @@
         syncToleranceSec: 0.35,
         driftCheckInterval: null,
         processingPausedPreview: false,
+        playbackRate: 1.0,
 
         init() {
             this.cameras.forEach(cam => {
@@ -2266,8 +2296,10 @@
             if (slider && !this.isScrubbing) slider.value = pct;
             this.updateTimeDisplay(curTime, dur);
 
-            // Bind counts strictly to playback timestamp if recorded events exist
-            if (window.recordedCrossingEvents && window.recordedCrossingEvents.length > 0) {
+            // Bind counts strictly to playback timestamp if recorded events exist.
+            // Preloaded/demo events are reference markers only: they belong to a
+            // previous run and must never produce a count.
+            if (window.eventsAreAuthoritative && window.recordedCrossingEvents && window.recordedCrossingEvents.length > 0) {
                 const activeEvents = window.recordedCrossingEvents.filter(ev => {
                     const t = Number(ev.timestamp_sec ?? ev.event_timestamp ?? ev.t ?? 0);
                     return t <= curTime;
@@ -2367,7 +2399,7 @@
             const videos = this.selectedVideos();
             if (!videos.length) return Promise.reject(new Error('Choose a video first.'));
             videos.forEach(video => {
-                video.playbackRate = 1.0;
+                video.playbackRate = this.playbackRate ?? 1.0;
             });
             return Promise.all(videos.map(video => video.play())).then(() => {
                 this.processingPausedPreview = false;
@@ -2379,6 +2411,14 @@
                 this.processingPausedPreview = false;
                 this.updatePlayStateUI();
                 throw err;
+            });
+        },
+
+        setPlaybackRate(rate) {
+            const r = Math.max(0.05, Math.min(1.0, Number(rate) || 1.0));
+            this.playbackRate = r;
+            this.selectedVideos().forEach(video => {
+                video.playbackRate = r;
             });
         },
 
@@ -2643,6 +2683,7 @@
                         window.recordedCrossingEvents = evData.events;
                         window.latestRawEvents = evData.events;
                         window.recordedTrackTimeline = evData.track_timeline || [];
+                        window.eventsAreAuthoritative = false;
                     }
                 }
             } catch (evErr) {
@@ -2734,13 +2775,17 @@
                 activeJobId = data.job_id;
                 setRecordedControlsBusy(true);
 
-                // Prime crossing events if preloaded from backend for frame-synced counting
-                if (data.preloaded_events && data.preloaded_events.length > 0) {
-                    window.recordedCrossingEvents = data.preloaded_events;
-                    window.latestRawEvents = data.preloaded_events;
-                    if (data.preloaded_track_timeline) {
-                        window.recordedTrackTimeline = data.preloaded_track_timeline;
-                    }
+                // Reset any demo/preloaded crossing events: the live pipeline result
+                // is authoritative for this run and replaces them as soon as the
+                // pipeline emits events. Preloaded crossings are mock or stale data.
+                window.recordedCrossingEvents = [];
+    window.latestRawEvents = [];
+    // Only events produced by the running pipeline may drive the HUD count.
+    window.eventsAreAuthoritative = false;
+                window.eventsAreAuthoritative = true;
+                updateDisplayedCounts({ loaded: 0, returned: 0, net: 0 });
+                if (data.preloaded_track_timeline && data.preloaded_track_timeline.length > 0) {
+                    window.recordedTrackTimeline = data.preloaded_track_timeline;
                 }
 
                 // Start playing the videos immediately upon clicking Start counting
@@ -2798,6 +2843,9 @@
 
     function pollJobProgress(jobId) {
         let lastRenderedPreviewPts = -1;
+        let lastPtsSample = null;
+        let lastPtsSampleMs = 0;
+        let serverRate = 0.15;
         const pPhase = document.getElementById('progressPhaseText');
         const pPct = document.getElementById('progressPctText');
         const pFill = document.getElementById('progressBarFill');
@@ -2824,6 +2872,23 @@
                     if (pPct) pPct.innerText = `${job.progress_pct || 0}%`;
                     if (pFill) pFill.style.width = `${job.progress_pct || 0}%`;
 
+                    // Keep the preview in step with the server pipeline. The browser
+                    // would otherwise play the clip at 1x and reach the end long
+                    // before the pipeline finished, which makes the timeline count
+                    // show a partial result that looks final.
+                    const nowMs = Date.now();
+                    if (lastPtsSample !== null && nowMs > lastPtsSampleMs) {
+                        const measured = (pts - lastPtsSample) / ((nowMs - lastPtsSampleMs) / 1000);
+                        if (measured > 0.001) serverRate = measured;
+                    }
+                    lastPtsSample = pts;
+                    lastPtsSampleMs = nowMs;
+                    SynchronizedTriplePlayer.setPlaybackRate(serverRate);
+                    const previewTime = SynchronizedTriplePlayer.getMasterTime();
+                    if (Math.abs(previewTime - pts) > 2.0) {
+                        SynchronizedTriplePlayer.seekTo(pts, false);
+                    }
+
                     // Update atomic server-tick preview frame (zero seekTo() calls, zero browser decoder thrashing)
                     const img = document.getElementById('imgTickPreview');
                     if (img && pts !== lastRenderedPreviewPts) {
@@ -2838,9 +2903,10 @@
                     // Live event ledger streaming
                     if (job.events && job.events.length > 0) {
                         window.latestRawEvents = job.events;
-                        if (!window.recordedCrossingEvents || window.recordedCrossingEvents.length === 0) {
-                            window.recordedCrossingEvents = job.events;
-                        }
+                        // Real detection results must always replace any preloaded or
+                        // demo events, otherwise the HUD keeps showing fabricated
+                        // counts instead of what the pipeline actually detected.
+                        window.recordedCrossingEvents = job.events;
                         applyEventsFilter();
                     }
 
@@ -2868,7 +2934,7 @@
                             timestamp_sec: pts,
                         });
                     }
-                    setCountingStatus(`Live counting active…`);
+                    setCountingStatus(`Live counting active… (processed ${pts.toFixed(1)}s / ${dur.toFixed(1)}s)`);
                 } else if (job.status === 'stopping') {
                     setCountingStatus('Stopping video processing.');
                 } else if (job.status === 'completed' || job.status === 'stopped' || job.status === 'incomplete') {
@@ -2890,12 +2956,13 @@
                             window.recordedCrossingEvents = finalEvents;
                             window.latestRawEvents = finalEvents;
                         }
+                        window.eventsAreAuthoritative = true;
                         window.recordedTrackTimeline = job.track_timeline || job.result?.track_timeline || job.result?.result?.track_timeline || [];
                         applyEventsFilter();
 
-                        // Keep verified counts on the main HUD matching playback playhead
-                        const curTime = SynchronizedTriplePlayer.getMasterTime();
-                        SynchronizedTriplePlayer.onMasterTimeUpdate(curTime);
+                        // At completion, show TOTAL counts on HUD (not playhead-bound)
+                        const totalCounts = job.snap?.counts || job.counts || {};
+                        updateDisplayedCounts(totalCounts);
 
                         const totalConfirmed = (counts => counts.loaded ?? 0)(job.snap?.counts || job.counts || {});
                         if (pPhase) pPhase.innerText = `Complete: ${totalConfirmed} cartons loaded.`;
@@ -2915,6 +2982,7 @@
                     btn.innerText = 'Start counting';
                     activeJobId = null;
                     setRecordedControlsBusy(false);
+                    SynchronizedTriplePlayer.setPlaybackRate(1.0);
                     SynchronizedTriplePlayer.pause();
                 } else if (job.status === 'failed' || job.status === 'error') {
                     clearInterval(jobPollTimer);
@@ -2927,6 +2995,7 @@
                     btn.innerText = 'Start counting';
                     activeJobId = null;
                     setRecordedControlsBusy(false);
+                    SynchronizedTriplePlayer.setPlaybackRate(1.0);
                     SynchronizedTriplePlayer.pause();
                     if (pPhase) pPhase.innerText = 'Could not count these videos.';
                 }
@@ -2941,9 +3010,11 @@
     async function stopRecordedCounting() {
         const jobId = activeJobId;
         if (!jobId) {
+            SynchronizedTriplePlayer.setPlaybackRate(1.0);
             SynchronizedTriplePlayer.pause();
             return;
         }
+        SynchronizedTriplePlayer.setPlaybackRate(1.0);
         SynchronizedTriplePlayer.pause();
         try {
             const response = await fetch(`/api/3angle/job_control/${jobId}`, {
@@ -3517,7 +3588,14 @@
             return true;
         });
 
-        renderFilteredEventsList(filtered, raw.length);
+        // Rendering the ledger must never be able to break the counting
+        // pipeline: this runs inside the job-poll handler, and a throw here
+        // would abort the poll before the final counts are applied.
+        try {
+            renderFilteredEventsList(filtered, raw.length);
+        } catch (renderErr) {
+            console.warn('Event list render error:', renderErr);
+        }
     }
 
     function renderFilteredEventsList(events, totalRaw) {
@@ -3534,6 +3612,11 @@
                 badge.style.color = '';
             }
         }
+
+        // The event ledger panel is optional. Returning early keeps a missing
+        // container from throwing inside the job-poll handler, which would
+        // abort the poll before the completion branch updates the counters.
+        if (!list) return;
 
         if (!events || events.length === 0) {
             if (totalRaw === 0) {

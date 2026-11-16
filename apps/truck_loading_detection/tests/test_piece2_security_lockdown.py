@@ -26,14 +26,20 @@ if _app_root not in sys.path:
     sys.path.insert(0, _app_root)
 
 from app import app, get_app_event_store
+from app import infer_camera_slot_from_filename
 from three_camera_system.security import CONFIGURED_API_KEYS, DEFAULT_FALLBACK_KEY
 
 
 @pytest.fixture
-def client():
+def client(tmp_path):
     app.config["TESTING"] = True
+    # Point tripwire persistence at a throwaway file so exercising the
+    # tripwire update endpoint never rewrites the production
+    # config/tripwires.json (which would silently change counting accuracy).
+    app.config["TRIPWIRE_CONFIG_PATH"] = str(tmp_path / "tripwires.json")
     with app.test_client() as c:
         yield c
+    app.config.pop("TRIPWIRE_CONFIG_PATH", None)
 
 
 @pytest.fixture
@@ -144,3 +150,69 @@ class TestSecurityLockdown:
         assert data.get("status") == "ok"
         assert "audit_logs" in data
         assert isinstance(data["audit_logs"], list)
+
+
+class TestCameraSlotLabelGuard:
+    """Guards against silently counting a camera feed under the wrong slot.
+
+    A video uploaded into the wrong slot (or named with a misleading prefix)
+    must be rejected or re-labelled by its authoritative `_top_synced` /
+    `_side_synced` / `_flank_synced` token, never counted as if it were a
+    different camera.
+    """
+
+    @pytest.mark.parametrize(
+        "filename,expected",
+        [
+            ("scenario1_top_synced.mp4", "cam_top"),
+            ("scenario2_side_synced.mp4", "cam_side"),
+            ("scenario1_flank_synced.mp4", "cam_flank"),
+            ("top_scenario1_top_synced.mp4", "cam_top"),
+            ("side_scenario2_top_synced.mp4", "cam_top"),
+            ("top_scenario1_side_synced.mp4", "cam_side"),
+            ("flank_scenario2_side_synced.mp4", "cam_side"),
+            ("side_video.mp4", "cam_side"),
+            ("random_clip.mp4", None),
+        ],
+    )
+    def test_camera_slot_inference(self, filename, expected):
+        assert infer_camera_slot_from_filename(filename) == expected
+
+    def test_mislabeled_video_is_rejected_instead_of_counted(self, client, auth_headers, tmp_path):
+        """A side feed assigned to the top slot must fail loudly, not under-count."""
+        for name in (
+            "scenario1_top_synced.mp4",
+            "scenario1_side_synced.mp4",
+            "scenario1_flank_synced.mp4",
+        ):
+            (tmp_path / name).write_bytes(b"not-a-real-video")
+
+        payload = {
+            "video_top": str(tmp_path / "scenario1_side_synced.mp4"),
+            "video_side": str(tmp_path / "scenario1_top_synced.mp4"),
+            "video_flank": str(tmp_path / "scenario1_flank_synced.mp4"),
+        }
+        res = client.post("/api/3angle/process", headers=auth_headers, json=payload)
+        assert res.status_code == 400
+        body = res.get_json()
+        assert "labeled for cam_side" in body["error"]
+
+    def test_uploaded_video_listing_uses_authoritative_label(self, client, tmp_path):
+        """Uploads whose slot prefix disagrees with their label are re-slotted."""
+        upload_dir = tmp_path / "uploads"
+        upload_dir.mkdir()
+        (upload_dir / "side_scenario2_top_synced.mp4").write_bytes(b"x")
+        (upload_dir / "top_scenario1_side_synced.mp4").write_bytes(b"x")
+
+        app.config["UPLOAD_FOLDER"] = str(upload_dir)
+        try:
+            res = client.get("/api/3angle/available_videos")
+            assert res.status_code == 200
+            videos = {v["name"]: v for v in res.get_json()["available_videos"]}
+        finally:
+            app.config["UPLOAD_FOLDER"] = str(
+                Path(__file__).resolve().parent.parent / "uploads"
+            )
+
+        assert videos["side_scenario2_top_synced.mp4"]["camera"] == "cam_top"
+        assert videos["top_scenario1_side_synced.mp4"]["camera"] == "cam_side"
