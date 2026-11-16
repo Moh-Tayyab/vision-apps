@@ -38,3 +38,5 @@ __pycache__/
 # Allow configuration JSON files
 !config/**/*.json
 !config/*.json
+config/accuracy_baseline_report.json
+
