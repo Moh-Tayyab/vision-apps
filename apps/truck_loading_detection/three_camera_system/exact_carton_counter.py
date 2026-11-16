@@ -339,10 +339,17 @@ class ThreeCameraCartonCounter:
         track_reid_window_frames: int = 15,
         track_reid_max_dist_px: float = 100.0,
         max_position_diff_frac: float = 0.30,
+        max_line_offset_diff_frac: float = 0.18,
+        max_lane_diff_frac: float = 0.35,
     ):
         self.camera_ids = tuple(camera_ids)
         self.fusion_window_sec = float(fusion_window_sec)
         self.max_position_diff_frac = float(max_position_diff_frac)
+        self.max_line_offset_diff_frac = float(max_line_offset_diff_frac)
+        self.max_lane_diff_frac = float(max_lane_diff_frac)
+
+        # Per-camera frame dimensions for correct normalized position comparison
+        self.frame_dims: Dict[str, Tuple[int, int]] = {cid: (1024, 576) for cid in self.camera_ids}
 
         # Per-camera tripwire counters
         self.counters: Dict[str, CameraTripwireCounter] = {}
@@ -389,6 +396,7 @@ class ThreeCameraCartonCounter:
         counter = self.counters.get(camera_id)
         if counter is not None:
             counter.set_line_frac(line_pos_frac, frame_w, frame_h, orientation)
+            self.frame_dims[camera_id] = (int(frame_w), int(frame_h))
 
     def set_loading_direction(self, direction: str):
         for counter in self.counters.values():
@@ -405,6 +413,19 @@ class ThreeCameraCartonCounter:
         for camera_id, side in truck_sides.items():
             self.set_truck_side(camera_id, side)
 
+    def set_frame_dims(self, camera_id: str, width: int, height: int):
+        """Set actual frame dimensions for a camera (used for normalized position comparison in fusion)."""
+        self.frame_dims[camera_id] = (int(width), int(height))
+
+    def _line_pos_px(self, camera_id: Optional[str]) -> float:
+        """Current tripwire position in pixels for a camera (0.0 when unknown)."""
+        counter = self.counters.get(camera_id) if camera_id else None
+        if counter is None:
+            return 0.0
+        if counter.line_orientation == "horizontal":
+            return float(counter.line_y)
+        return float(counter.line_x)
+
     def reset(self):
         for counter in self.counters.values():
             counter.reset()
@@ -414,6 +435,7 @@ class ThreeCameraCartonCounter:
         self.total_in = 0
         self.total_out = 0
         self.last_update_time = None
+        self.frame_dims = {cid: (1024, 576) for cid in self.camera_ids}
 
     # ------------------------------------------------------------------
     # Cross-camera fusion: deduplicate same physical carton seen by >=1 camera
@@ -442,20 +464,30 @@ class ThreeCameraCartonCounter:
                 continue
 
             # --- Spatial position verification ---
-            # Without homography, compare normalized positions relative to each
-            # camera's frame. If positions are on opposite extremes of the frame,
-            # they are likely different cartons even if within the time window.
+            # Every crossing happens ON that camera's own tripwire, so the
+            # meaningful horizontal quantity is the offset from each camera's
+            # OWN line. Comparing raw normalized X instead would penalise the
+            # per-camera line offset (e.g. cam_top line at 0.58 vs cam_side at
+            # 0.42) and break fusion, double-counting one physical carton.
+            # The vertical axis identifies the loading lane, so cartons in
+            # different lanes must not be merged.
             recent_pos = recent.get("position")
             if ev_pos is not None and recent_pos is not None:
-                # Get frame dimensions from the visualizer/counter state if available,
-                # otherwise default to 1024x576 (app default). We use normalized diff.
-                ev_nx = ev_pos[0] / 1024.0
-                ev_ny = ev_pos[1] / 576.0
-                rc_nx = recent_pos[0] / 1024.0
-                rc_ny = recent_pos[1] / 576.0
-                pos_diff = ((ev_nx - rc_nx) ** 2 + (ev_ny - rc_ny) ** 2) ** 0.5
-                if pos_diff > self.max_position_diff_frac:
-                    # Positions too far apart -> different cartons, do not fuse
+                ev_w, ev_h = self.frame_dims.get(ev_cam, (1024, 576))
+                rc_w, rc_h = self.frame_dims.get(recent.get("camera_id"), (1024, 576))
+                ev_line = self._line_pos_px(ev_cam)
+                rc_line = self._line_pos_px(recent.get("camera_id"))
+                # Offset from own tripwire, normalized by frame width.
+                ev_dx = (ev_pos[0] - ev_line) / float(ev_w)
+                rc_dx = (recent_pos[0] - rc_line) / float(rc_w)
+                # Vertical lane offset, normalized by frame height.
+                ev_dy = ev_pos[1] / float(ev_h)
+                rc_dy = recent_pos[1] / float(rc_h)
+                if abs(ev_dx - rc_dx) > self.max_line_offset_diff_frac:
+                    # Different point across the tripwire -> different cartons
+                    continue
+                if abs(ev_dy - rc_dy) > self.max_lane_diff_frac:
+                    # Different loading lane -> different cartons
                     continue
 
             # Same physical carton confirmed by another camera -> merge, no new count

@@ -150,7 +150,7 @@ class ThreeCameraCartonPipeline:
         fusion_window: float = 1.0,
         min_consensus_cams: int = 2,
         device: Optional[str] = None,
-        imgsz: int = 384,
+        imgsz: int = 640,
         **kwargs,
     ) -> None:
         self.camera_ids = tuple(camera_ids)
@@ -196,6 +196,8 @@ class ThreeCameraCartonPipeline:
         self.detector = CartonDetectorAdapter(
             model_path=model_path,
             conf_threshold=conf_threshold,
+            imgsz=int(imgsz),
+            enable_content_crop=bool(kwargs.get("enable_content_crop", False)),
         )
 
         # 2. Per-Camera Trackers
@@ -237,6 +239,9 @@ class ThreeCameraCartonPipeline:
                 direction_sign=int(cfg_dict.get("direction_sign", -1 if cid == "cam_top" else 1)),
                 hysteresis_frac=float(cfg_dict.get("hysteresis_frac", 0.01)),
                 min_displacement_px=float(cfg_dict.get("min_displacement_px", 10.0)),
+                min_crossing_net_displacement_px=float(
+                    cfg_dict.get("min_crossing_net_displacement_px", 25.0)
+                ),
                 cooldown_frames=int(cfg_dict.get("cooldown_frames", 20)),
                 support_occlusion_stitching=bool(cfg_dict.get("support_occlusion_stitching", True)),
                 min_transit_sec=float(cfg_dict.get("min_transit_sec", 0.08)),
@@ -247,6 +252,9 @@ class ThreeCameraCartonPipeline:
 
         self.refractory_debounce_sec: float = float(kwargs.get("refractory_debounce_sec", 0.70))
         self.time_window_sec: float = 2.4  # Canonical multi-camera physical transit association window
+        self.single_camera_commit_delay_sec: float = float(
+            kwargs.get("single_camera_commit_delay_sec", 1.80)
+        )
         self._active_crossing_windows: List[CrossingWindow] = []
         self._next_window_id: int = 1
         self._total_committed_count: int = 0
@@ -378,10 +386,11 @@ class ThreeCameraCartonPipeline:
             if not w.committed and (
                 # Instant Multi-Camera Agreement:
                 # Multi-camera agreements commit within 1-2 frames (0.05s);
-                # Single-camera observations wait 1.80s physical transit time for secondary corridor view.
+                # Single-camera observations wait for the physical transit time so a
+                # secondary corridor view of the same carton can still corroborate it.
                 (len(w.local_events) >= 2 and (global_t - w.last_time) >= 0.05)
-                or (global_t - w.last_time) >= 1.80
-                or (global_t - w.start_time) >= 2.40
+                or (global_t - w.last_time) >= self.single_camera_commit_delay_sec
+                or (global_t - w.start_time) >= self.time_window_sec
             )
         ]
 
@@ -510,12 +519,9 @@ class ThreeCameraCartonPipeline:
                     # In a single loading corridor, a rapid re-detection within debounce window is an occlusion split artifact.
                     # Independent carton loading traversals by a worker take >= 1.0s.
                     if phys_carton is None:
-                        for phys in self.state_machine._physical_cartons.values():
-                            if phys.is_committed and phys.last_committed_direction == primary_dir:
-                                ref_dt = win.start_time - (phys.committed_timestamp or phys.last_seen_time)
-                                if 0.0 <= ref_dt <= getattr(self, "refractory_debounce_sec", 0.70):
-                                    phys_carton = phys
-                                    break
+                        phys_carton = self._find_refractory_physical_carton(
+                            win.start_time, primary_dir
+                        )
 
                     if phys_carton is None:
                         c_id = (
@@ -637,9 +643,9 @@ class ThreeCameraCartonPipeline:
 
                         if is_auto_confirmed:
                             self._confirmed_count += resolved_qty
+                            self._total_committed_count += resolved_qty
                         else:
                             self._review_required_count += resolved_qty
-                        self._total_committed_count += resolved_qty
                     else:
                         logger.info("Event commit blocked for carton %s: %s",
                                     phys_carton.carton_id, reason)
@@ -755,6 +761,33 @@ class ThreeCameraCartonPipeline:
                 "and a physically verified tripwire for every configured camera"
             )
         return verdict
+
+    def _find_refractory_physical_carton(
+        self, window_start_time: float, direction: str
+    ) -> Optional[Any]:
+        """Find an already-committed physical carton that this window re-detects.
+
+        A camera whose crossing is processed later but timestamped slightly
+        earlier is still the same physical carton, so the time comparison is
+        symmetric around the committed crossing.
+        """
+        debounce = getattr(self, "refractory_debounce_sec", 0.70)
+        matches: List[Tuple[float, Any]] = []
+        for phys in self.state_machine._physical_cartons.values():
+            if not phys.is_committed:
+                continue
+            if phys.last_committed_direction != direction:
+                continue
+            ref_dt = abs(
+                window_start_time
+                - (phys.committed_timestamp or phys.last_seen_time)
+            )
+            if ref_dt <= debounce:
+                matches.append((ref_dt, phys))
+        if not matches:
+            return None
+        matches.sort(key=lambda item: item[0])
+        return matches[0][1]
 
     def _add_crossing_candidate_to_window(
         self, ev: LocalCameraCrossingCandidate, arrival_time: Optional[float] = None

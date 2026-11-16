@@ -640,6 +640,7 @@ class CameraTripwireConfig:
     direction_sign: int = 1  # +1 (increasing coordinate) or -1 (decreasing coordinate)
     hysteresis_frac: float = 0.01  # buffer band fraction
     min_displacement_px: float = 10.0  # minimum motion required
+    min_crossing_net_displacement_px: float = 25.0  # minimum travel across the line band
     cooldown_frames: int = 20  # cooldown per tracklet
     support_occlusion_stitching: bool = True
     min_transit_sec: float = 0.08
@@ -746,9 +747,9 @@ class PerCameraTripwire:
             if not crossed or current_coord == previous_coord:
                 continue
 
-            fraction = (line_px - previous_coord) / (current_coord - previous_coord)
             previous_time = float(previous[2])
             current_time = float(current[2])
+            fraction = (line_px - previous_coord) / (current_coord - previous_coord)
             point = (
                 float(previous[0]) + fraction * (float(current[0]) - float(previous[0])),
                 float(previous[1]) + fraction * (float(current[1]) - float(previous[1])),
@@ -756,6 +757,33 @@ class PerCameraTripwire:
             return point, previous_time + fraction * (current_time - previous_time)
 
         return None, fallback_timestamp
+
+    def _crossing_has_directed_motion(
+        self,
+        tracklet: Any,
+        direction: str,
+        dim_px: float,
+    ) -> bool:
+        """True when the track recently travelled across the line in the crossing direction.
+
+        A detection box that oscillates around the line (merged or split boxes
+        around a static pile of cartons) has near-zero net travel over a short
+        window even though its cumulative displacement keeps growing. Only a
+        sustained, directed move is evidence of a real crossing.
+        """
+        traj = list(getattr(tracklet, "trajectory", ()))
+        if len(traj) < 3:
+            return True
+
+        coord_idx = 0 if self.cfg.orientation == "vertical" else 1
+        window = traj[-4:]
+        net = float(window[-1][coord_idx]) - float(window[0][coord_idx])
+        loading_sign = 1.0 if ((self.cfg.direction_sign > 0) == (direction == "IN")) else -1.0
+        threshold = max(
+            self.cfg.min_crossing_net_displacement_px,
+            self.cfg.min_displacement_px,
+        )
+        return (loading_sign * net) >= threshold
 
     def update(
         self,
@@ -882,6 +910,63 @@ class PerCameraTripwire:
                         image_width=frame_dims[1],
                         image_height=frame_dims[0],
                     )
+
+                # No prior approach record but track is on the "after" side moving
+                # in the loading direction. This happens when a carton was occluded
+                # before the tripwire and only becomes visible after crossing.
+                # Create an IN event using the tracklet's own trajectory for crossing
+                # point interpolation.
+                if len(trk_traj) >= 2:
+                    crossing_point, crossing_time = self._crossing_point(
+                        trk_traj,
+                        frame_dims,
+                        "IN",
+                        timestamp_sec,
+                    )
+                else:
+                    crossing_point, crossing_time = None, timestamp_sec
+
+                if crossing_point is None:
+                    return None
+
+                self._emitted_tracks.add(tid)
+                self._last_event_frame[tid] = frame_idx
+                self._last_crossing_time = timestamp_sec
+                if not hasattr(self, "_recent_crossings"):
+                    self._recent_crossings = []
+                self._recent_crossings.append((timestamp_sec, tracklet.center))
+                self._recent_crossings = [
+                    c for c in self._recent_crossings if (timestamp_sec - c[0]) <= 5.0
+                ]
+
+                conf = getattr(tracklet, "current_confidence", 0.5)
+                ev_id = f"{self.cfg.camera_id}_ev_{self._event_counter:04d}"
+                self._event_counter += 1
+                bw = getattr(tracklet, "width", 1.0)
+                bh = getattr(tracklet, "height", 1.0)
+                ar = bh / max(1.0, bw)
+                est_qty = max(1, int(round(ar))) if ar >= 1.6 else 1
+
+                return LocalCameraCrossingCandidate(
+                    local_event_id=ev_id,
+                    camera_id=self.cfg.camera_id,
+                    local_track_id=tid,
+                    timestamp_sec=crossing_time,
+                    direction="IN",
+                    confidence=conf,
+                    bbox=getattr(tracklet, "current_bbox", (0.0, 0.0, 0.0, 0.0)),
+                    aspect_ratio=round(ar, 2),
+                    estimated_qty=est_qty,
+                    displacement=getattr(tracklet, "displacement", 0.0),
+                    occlusion_stitched=True,
+                    crossing_point_px=crossing_point,
+                    crossing_line_px=self.cfg.line_pos_frac * (
+                        frame_dims[1] if self.cfg.orientation == "vertical" else frame_dims[0]
+                    ),
+                    observed_frame_idx=frame_idx,
+                    image_width=frame_dims[1],
+                    image_height=frame_dims[0],
+                )
             return None
 
         # Update approach record if in before zone
@@ -907,8 +992,12 @@ class PerCameraTripwire:
             self._track_sides[tid] = side
             init_side = self._initial_sides.get(tid, prev_side)
 
-            # Check direction
-            direction = "IN" if (init_side == "before" and side == "after") else "OUT"
+            # Check direction. If track first appeared in deadband (init_side=None),
+            # determine direction from destination side: after=truck side=IN, before=dock side=OUT.
+            if init_side is None:
+                direction = "IN" if side == "after" else "OUT"
+            else:
+                direction = "IN" if (init_side == "before" and side == "after") else "OUT"
 
             # Check cooldown
             last_f = self._last_event_frame.get(tid, -999)
@@ -918,6 +1007,13 @@ class PerCameraTripwire:
             # Check displacement
             disp = getattr(tracklet, "displacement", 0.0)
             if disp < self.cfg.min_displacement_px:
+                return None
+
+            # Check that the object actually travelled across the line band.
+            # Cumulative displacement can accumulate while a detection box
+            # merely jitters in place (merged/split boxes around a static
+            # pile), which would let one object claim the line repeatedly.
+            if not self._crossing_has_directed_motion(tracklet, direction, dim_px):
                 return None
 
             # Mark any approaches for this track as paired

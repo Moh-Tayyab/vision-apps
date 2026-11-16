@@ -52,11 +52,15 @@ class CartonMaskRefiner:
         worker_subtraction_margin_px: int = 2,
         temporal_blend_alpha: float = 0.65,
         min_carton_area_px: float = 150.0,
+        worker_fp_confidence_threshold: float = 0.25,
+        worker_fp_overlap_ratio: float = 0.70,
     ) -> None:
         self.smoothing_epsilon_ratio = float(smoothing_epsilon_ratio)
         self.worker_subtraction_margin_px = int(worker_subtraction_margin_px)
         self.temporal_blend_alpha = float(temporal_blend_alpha)
         self.min_carton_area_px = float(min_carton_area_px)
+        self.worker_fp_confidence_threshold = float(worker_fp_confidence_threshold)
+        self.worker_fp_overlap_ratio = float(worker_fp_overlap_ratio)
 
         # Track history for temporal contour stabilization: track_id -> previous polygon_pts
         self._previous_masks: Dict[str, np.ndarray] = {}
@@ -92,6 +96,61 @@ class CartonMaskRefiner:
             else:
                 resampled[i] = pts[idx]
         return resampled
+
+    def _worker_fp_verdict(
+        self,
+        carton_bin: np.ndarray,
+        worker_bin: np.ndarray,
+        initial_area: float,
+        confidence: float,
+    ) -> bool:
+        """Shared verdict for 'this mask is worker clothing, not a carton'."""
+        if confidence >= self.worker_fp_confidence_threshold:
+            return False
+        overlap_px = float(cv2.countNonZero(cv2.bitwise_and(carton_bin, worker_bin)))
+        if overlap_px <= 0.0:
+            return False
+        if (overlap_px / max(1.0, initial_area)) < self.worker_fp_overlap_ratio:
+            return False
+        independent_area = float(cv2.countNonZero(cv2.subtract(carton_bin, worker_bin)))
+        return independent_area < max(200.0, 0.10 * initial_area)
+
+    def worker_false_positive(
+        self,
+        raw_polygon: Union[np.ndarray, Sequence[Tuple[float, float]]],
+        image_shape: Tuple[int, int],
+        worker_polygons: Optional[Sequence[Union[np.ndarray, Sequence[Tuple[float, float]]]]] = None,
+        confidence: float = 1.0,
+    ) -> bool:
+        """True when a low-confidence mask is (almost) entirely a worker silhouette.
+
+        A carton-only model routinely fires on clothing and limbs. When such a
+        mask overlaps a worker silhouette almost completely and the detector
+        confidence sits in the noise floor, the detection is not a carton and
+        must never reach counting logic.
+        """
+        if not worker_polygons or confidence >= self.worker_fp_confidence_threshold:
+            return False
+
+        h, w = image_shape[:2]
+        poly = np.array(raw_polygon, dtype=np.float32)
+        if poly.ndim != 2 or poly.shape[1] != 2 or len(poly) < 3:
+            return False
+
+        carton_bin = np.zeros((h, w), dtype=np.uint8)
+        poly_int = np.clip(np.round(poly).astype(np.int32), 0, [w - 1, h - 1])
+        cv2.fillPoly(carton_bin, [poly_int], 255)
+        initial_area = float(cv2.countNonZero(carton_bin))
+        if initial_area <= 0.0:
+            return False
+
+        worker_bin = np.zeros((h, w), dtype=np.uint8)
+        for w_poly in worker_polygons:
+            if w_poly is not None and len(w_poly) >= 3:
+                wp_int = np.clip(np.round(np.array(w_poly)).astype(np.int32), 0, [w - 1, h - 1])
+                cv2.fillPoly(worker_bin, [wp_int], 255)
+
+        return self._worker_fp_verdict(carton_bin, worker_bin, initial_area, confidence)
 
     def refine_carton_mask(
         self,
@@ -162,11 +221,8 @@ class CartonMaskRefiner:
                     is_occluded = True
                     # If confidence is low (< 0.25) and almost entirely enveloped by worker body,
                     # reject as worker clothing texture / false phantom detection
-                    if confidence < 0.25:
-                        independent_carton = cv2.subtract(carton_bin, worker_bin)
-                        independent_area = float(cv2.countNonZero(independent_carton))
-                        if independent_area < max(200.0, 0.10 * initial_area):
-                            return None
+                    if self._worker_fp_verdict(carton_bin, worker_bin, initial_area, confidence):
+                        return None
                     # Otherwise, worker is holding carton with heavy occlusion: preserve visible carton
 
         # 3. Extract Smooth Outer Contour

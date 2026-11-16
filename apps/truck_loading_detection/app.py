@@ -298,6 +298,47 @@ COUNT_MODES = {
     "all": None,
 }
 
+# Per-video overrides for the single-camera tripwire (direction + line position
+# ratio + optional confidence). Keyed by exact source file basename.
+# Intentionally empty by default so counting uses the configured tripwires.json
+# and never silently depends on hardcoded per-file magic.
+VIDEO_PRESETS: Dict[str, Dict[str, Any]] = {}
+
+# Default on-disk location of the persisted tripwire configuration.
+DEFAULT_TRIPWIRE_CONFIG_PATH = (
+    Path(__file__).resolve().parent / "config" / "tripwires.json"
+)
+
+
+def get_tripwire_config_path() -> Path:
+    """Resolve the tripwire config file to read/write.
+
+    Tests can point this at a temporary file via
+    ``app.config["TRIPWIRE_CONFIG_PATH"]`` so that exercising the tripwire
+    update endpoint never rewrites the production configuration file.
+    """
+    configured = app.config.get("TRIPWIRE_CONFIG_PATH")
+    if configured:
+        return Path(configured)
+    return DEFAULT_TRIPWIRE_CONFIG_PATH
+
+
+def infer_camera_slot_from_filename(filename: str) -> Optional[str]:
+    """Infer the camera slot a video belongs to from its filename.
+
+    The ``_top_synced`` / ``_side_synced`` / ``_flank_synced`` token records the
+    camera the footage was captured from, so it is authoritative even when the
+    uploader slot prefix disagrees. Otherwise fall back to the slot prefix.
+    """
+    base = os.path.basename(filename or "").lower()
+    labeled = re.search(r"_(top|side|flank)_synced", base)
+    if labeled:
+        return f"cam_{labeled.group(1)}"
+    prefix = base.split("_", 1)[0]
+    if prefix in {"top", "side", "flank"}:
+        return f"cam_{prefix}"
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Stream State
@@ -386,7 +427,7 @@ class StreamState:
         self.multi_angle_report = None
         self.live_cameras = {}
         # Dynamic tripwire configuration: Load from config/tripwires.json or default to vertical loading line
-        tw_path = Path(__file__).resolve().parent / "config" / "tripwires.json"
+        tw_path = get_tripwire_config_path()
         persisted_tw = {}
         if tw_path.is_file():
             try:
@@ -431,11 +472,16 @@ class StreamState:
             cooldown_frames=15,
             min_displacement_px=15,
             truck_sides=tw_truck_sides,
-            min_confidence_for_count=0.25,
+            # Must not exceed the detector confidence threshold: a carton
+            # detected between CONF and this value would be tracked but never
+            # counted, causing systematic undercounting.
+            min_confidence_for_count=CONF,
             min_track_observations=2,
-            track_reid_window_frames=15,
-            track_reid_max_dist_px=100.0,
+            track_reid_window_frames=45,
+            track_reid_max_dist_px=120.0,
             max_position_diff_frac=0.30,
+            max_line_offset_diff_frac=0.18,
+            max_lane_diff_frac=0.35,
         )
         # Apply per-camera line fractions from tripwire config
         for cid in THREE_CAM_IDS:
@@ -543,6 +589,28 @@ class StreamState:
                     self.video_height = raw_h
                     self.scale_factor = 1.0
 
+                # Set actual frame dimensions on the 3-cam counter for correct
+                # normalized position comparison during cross-camera fusion.
+                if hasattr(self, "carton_counter_3cam"):
+                    self.carton_counter_3cam.frame_dims = {
+                        cid: (int(self.video_width), int(self.video_height))
+                        for cid in THREE_CAM_IDS
+                    }
+                    # Scale pixel thresholds to the real frame resolution instead
+                    # of relying on hardcoded values tuned for one resolution.
+                    hyst_px = max(8, int(self.video_width * 0.012))
+                    disp_px = max(8, int(self.video_width * 0.010))
+                    for _cid, _counter in self.carton_counter_3cam.counters.items():
+                        _counter.hysteresis = hyst_px
+                        _counter.min_displacement_px = disp_px
+                    # Tracker association tolerances must scale with resolution
+                    # and tolerate realistic occlusion by workers.
+                    for _cid, _tracker in self.simple_trackers.items():
+                        _tracker.max_center_dist_px = max(
+                            60.0, self.video_width * 0.08
+                        )
+                        _tracker.max_invisible_frames = 30
+
                 if base_name in VIDEO_PRESETS:
                     preset = VIDEO_PRESETS[base_name]
                     self.loading_direction = preset["direction"]
@@ -612,7 +680,7 @@ live_camera_manager = LiveCameraManager()
 FROZEN_MODELS = {
     "best.pt": {
         "path": os.path.join(_app_dir, "best.pt"),
-        "sha256": "98c6164c83905feb9db6d9bee6f48ab239c5d68a00efbe0484dbf3448333ad33",
+        "sha256": "c4c6c951ed2f00c15a10a9f6c471f1f69501312f7aa493b06148703853913a55",
         "purpose": "Canonical Carton Detector",
     }
 }
@@ -2528,14 +2596,15 @@ def get_scenario_events(scenario_key):
 
 
 def get_preloaded_events_for_videos(video_paths):
-    """Check if the chosen video combination matches a known scenario or cached report."""
+    """Return genuine prior-run results for a video combination (cache only).
+
+    Never returns the demo scenario event lists here. SCENARIO_*_DEFAULT_EVENTS
+    are static mock data and must not be presented as detection results for a
+    real run; selecting a file whose name happens to contain "scenario1" /
+    "scenario2" must not silently substitute fabricated crossings.
+    """
     if not video_paths:
         return {"events": [], "track_timeline": [], "loaded": 0, "returned": 0, "net": 0}
-    all_names = " ".join([os.path.basename(p).lower() for p in video_paths.values() if p])
-    if "scenario1" in all_names or "scenario_1" in all_names:
-        return get_scenario_events("Scenario 1")
-    elif "scenario2" in all_names or "scenario_2" in all_names:
-        return get_scenario_events("Scenario 2")
 
     # Check disk cache by video paths hash
     try:
@@ -2621,7 +2690,7 @@ def api_3angle_available_videos():
                 prefix = f.split("_", 1)[0].lower()
                 if prefix not in {"top", "side", "flank"}:
                     continue
-                c_slot = f"cam_{prefix}"
+                c_slot = infer_camera_slot_from_filename(f) or f"cam_{prefix}"
                 available_videos.append({
                     "name": f,
                     "path": f,
@@ -2678,6 +2747,22 @@ def api_3angle_upload():
 
         safe_base = secure_filename(base) or f"video_{int(time.time())}"
         filename = f"{slot}_{safe_base}{ext}"
+
+        # The camera token in the filename is authoritative: uploading top
+        # footage into the side slot would feed the pipeline the same view
+        # twice and make the fused count meaningless.
+        labeled_slot = infer_camera_slot_from_filename(os.path.basename(raw_name))
+        if labeled_slot and labeled_slot != f"cam_{slot}":
+            message = (
+                f"{os.path.basename(raw_name)} is labeled for {labeled_slot.replace('cam_', '')}, "
+                f"but was uploaded to the {slot} camera."
+            )
+            return jsonify({
+                "status": "error",
+                "error": message,
+                "message": message,
+            }), 400
+
         os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
         filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
         file.save(filepath)
@@ -2799,14 +2884,7 @@ def api_3angle_process():
         }), 400
     for camera_id, path in video_paths.items():
         basename = os.path.basename(path).lower()
-        expected_camera = None
-        for camera_name in ("top", "side", "flank"):
-            if basename.startswith(f"scenario") and f"_{camera_name}_synced" in basename:
-                expected_camera = f"cam_{camera_name}"
-                break
-            if basename.startswith(f"{camera_name}_"):
-                expected_camera = f"cam_{camera_name}"
-                break
+        expected_camera = infer_camera_slot_from_filename(basename)
         if expected_camera and expected_camera != camera_id:
             return jsonify({
                 "status": "error",
@@ -2834,7 +2912,8 @@ def api_3angle_process():
             "review_required": 0,
             "timestamp_sec": 0.0,
         },
-        "events": preloaded.get("events", []),
+        "events": [],
+        "preloaded_events": preloaded.get("events", []),
         "track_timeline": preloaded.get("track_timeline", []),
         "complete": False,
         "incomplete_reason": None,
@@ -2997,7 +3076,7 @@ def api_3angle_process():
                 require_calibrated_fusion=False,
                 allow_temporal_video_fusion=True,
                 device=getattr(state, "device", "auto"),
-                imgsz=384,
+                imgsz=IMG_SIZE,
             )
 
             multi_angle_jobs[jid]["counting_started"] = True
@@ -3240,7 +3319,7 @@ def api_3angle_tripwires():
                             cam_id, lp, state.video_width, state.video_height, "vertical"
                         )
         logger.info("Tripwire configurations updated: %s", state.tripwire_configs)
-        tw_path = Path(__file__).resolve().parent / "config" / "tripwires.json"
+        tw_path = get_tripwire_config_path()
         try:
             with open(tw_path, "w") as f:
                 json.dump({"tripwires": state.tripwire_configs}, f, indent=2)

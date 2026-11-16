@@ -80,9 +80,15 @@ class CartonDetectorAdapter:
         model_path: str,
         conf_threshold: float = 0.25,
         iou_threshold: float = 0.45,
-        imgsz: int = 384,
+        imgsz: int = 640,
         device: str = "cpu",
         preferred_profile: str = "auto",
+        worker_model_path: Optional[str] = None,
+        worker_conf: float = 0.25,
+        enable_worker_disentanglement: bool = True,
+        content_crop_margin_px: int = 4,
+        content_crop_min_coverage: float = 0.92,
+        enable_content_crop: bool = False,
     ) -> None:
         self.model_path = str(model_path)
         self.conf_threshold = float(conf_threshold)
@@ -160,6 +166,124 @@ class CartonDetectorAdapter:
             )
 
         self.refiner = CartonMaskRefiner()
+        self._worker_model = None
+        self._worker_model_failed = False
+        self.worker_conf = float(worker_conf)
+        self.enable_worker_disentanglement = bool(enable_worker_disentanglement)
+        self.content_crop_margin_px = int(content_crop_margin_px)
+        self.content_crop_min_coverage = float(content_crop_min_coverage)
+        self.enable_content_crop = bool(enable_content_crop)
+        self.worker_model_path = self._resolve_worker_model_path(worker_model_path)
+
+    def _resolve_worker_model_path(self, worker_model_path: Optional[str]) -> Optional[str]:
+        """Locate the COCO worker-silhouette segmentation checkpoint used for mask disentanglement."""
+        if worker_model_path:
+            return str(worker_model_path) if Path(worker_model_path).exists() else None
+
+        app_dir = Path(__file__).resolve().parent.parent
+        repo_root = app_dir.parent.parent
+        for candidate in (
+            repo_root / "yolo11n-seg.pt",
+            app_dir / "yolo11n-seg.pt",
+            Path.cwd() / "yolo11n-seg.pt",
+        ):
+            if candidate.exists():
+                return str(candidate)
+        return None
+
+    def _worker_polygons(self, frame: np.ndarray) -> List[Any]:
+        """Segment worker silhouettes so carton masks can be disentangled from people."""
+        return self._worker_polygons_batch([frame])[0]
+
+    def _worker_polygons_batch(self, frames: Sequence[np.ndarray]) -> List[List[Any]]:
+        """Segment worker silhouettes for several frames in a single forward pass."""
+        empty = [[] for _ in frames]
+        if not self.enable_worker_disentanglement or self.worker_model_path is None:
+            return empty
+        if not frames:
+            return empty
+
+        if self._worker_model is None:
+            if self._worker_model_failed:
+                return empty
+            try:
+                from ultralytics import YOLO
+
+                self._worker_model = YOLO(self.worker_model_path)
+            except Exception as e:
+                self._worker_model_failed = True
+                logger.warning(
+                    "Worker segmentation model unavailable at '%s': %s",
+                    self.worker_model_path,
+                    e,
+                )
+                return empty
+
+        try:
+            results = self._worker_model.predict(
+                list(frames),
+                classes=[0],
+                conf=self.worker_conf,
+                imgsz=self.imgsz,
+                device=self.device,
+                verbose=False,
+            )
+        except Exception as e:
+            logger.debug("Worker segmentation failed: %s", e)
+            return empty
+
+        polygons: List[List[Any]] = []
+        for result in results or []:
+            frame_polys: List[Any] = []
+            masks = getattr(result, "masks", None)
+            if masks is not None and getattr(masks, "xy", None) is not None:
+                for poly in masks.xy:
+                    if poly is not None and len(poly) >= 3:
+                        frame_polys.append(poly)
+            polygons.append(frame_polys)
+        while len(polygons) < len(frames):
+            polygons.append([])
+        return polygons
+
+    @staticmethod
+    def _offset_worker_polygons(
+        polygons: Optional[Sequence[Any]], x_offset: int
+    ) -> Optional[List[Any]]:
+        """Shift worker silhouettes from crop coordinates back to full-frame coordinates."""
+        if not polygons or not x_offset:
+            return list(polygons) if polygons else polygons
+        shifted: List[Any] = []
+        for poly in polygons:
+            arr = np.asarray(poly, dtype=np.float32).copy()
+            if arr.ndim == 2 and arr.shape[1] == 2:
+                arr[:, 0] += x_offset
+            shifted.append(arr)
+        return shifted
+
+    def _content_crop(self, frame: np.ndarray) -> Tuple[int, int]:
+        """Horizontal bounds of the non-black image content, padded by a small margin.
+
+        Normalized multi-camera videos are padded to a common canvas, so a
+        portrait camera occupies only a narrow strip of the frame. Running
+        inference on the padded frame squeezes that content into a tiny part
+        of the model input and destroys detection confidence, so the content
+        is cropped before inference and the coordinates are mapped back.
+        """
+        h, w = frame.shape[:2]
+        if h <= 0 or w <= 0 or not self.enable_content_crop:
+            return 0, w
+        try:
+            gray = frame.max(axis=2) if frame.ndim == 3 else frame
+            cols = np.where(gray.max(axis=0) > 12)[0]
+        except Exception:
+            return 0, w
+        if cols.size == 0:
+            return 0, w
+        x0 = max(0, int(cols.min()) - self.content_crop_margin_px)
+        x1 = min(w, int(cols.max()) + 1 + self.content_crop_margin_px)
+        if (x1 - x0) >= (w * self.content_crop_min_coverage):
+            return 0, w
+        return x0, x1
 
     @property
     def memory_usage_mb(self) -> float:
@@ -226,10 +350,13 @@ class CartonDetectorAdapter:
 
         conf = float(conf_override if conf_override is not None else self.conf_threshold)
 
+        crop_x0, crop_x1 = self._content_crop(frame)
+        infer_frame = frame[:, crop_x0:crop_x1] if crop_x1 > crop_x0 else frame
+
         t_start = time.perf_counter()
         try:
             results = self._model.predict(
-                source=frame,
+                source=infer_frame,
                 conf=conf,
                 iou=self.iou_threshold,
                 imgsz=self.imgsz,
@@ -249,7 +376,21 @@ class CartonDetectorAdapter:
         if not results:
             return []
 
-        return self._parse_results(results[0], camera_id, frame_idx, timestamp_sec, w, h, worker_polygons=worker_polygons)
+        if worker_polygons is None:
+            worker_polygons = self._offset_worker_polygons(
+                self._worker_polygons(infer_frame), crop_x0
+            )
+
+        return self._parse_results(
+            results[0],
+            camera_id,
+            frame_idx,
+            timestamp_sec,
+            w,
+            h,
+            worker_polygons=worker_polygons,
+            x_offset=crop_x0,
+        )
 
     def detect_batch(
         self,
@@ -320,6 +461,7 @@ class CartonDetectorAdapter:
         w: int,
         h: int,
         worker_polygons: Optional[Sequence[Any]] = None,
+        x_offset: int = 0,
     ) -> List[CanonicalCartonDetection]:
         detections: List[CanonicalCartonDetection] = []
         boxes = getattr(res, "boxes", None)
@@ -339,7 +481,7 @@ class CartonDetectorAdapter:
 
             score = float(box.conf[0].item())
             xyxy = box.xyxy[0].cpu().numpy()
-            x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+            x1, y1, x2, y2 = float(xyxy[0]) + x_offset, float(xyxy[1]), float(xyxy[2]) + x_offset, float(xyxy[3])
 
             # Clip to image boundaries
             x1 = max(0.0, min(float(w), x1))
@@ -360,9 +502,18 @@ class CartonDetectorAdapter:
             if has_masks and idx < len(masks.xy):
                 raw_poly = masks.xy[idx]
                 if raw_poly is not None and len(raw_poly) >= 3:
-                    raw_poly_pts = [(float(pt[0]), float(pt[1])) for pt in raw_poly]
+                    raw_poly_pts = [
+                        (float(pt[0]) + x_offset, float(pt[1])) for pt in raw_poly
+                    ]
+                    if self.refiner.worker_false_positive(
+                        raw_polygon=raw_poly_pts,
+                        image_shape=(h, w),
+                        worker_polygons=worker_polygons,
+                        confidence=score,
+                    ):
+                        continue
                     refined = self.refiner.refine_carton_mask(
-                        raw_polygon=raw_poly,
+                        raw_polygon=raw_poly_pts,
                         image_shape=(h, w),
                         worker_polygons=worker_polygons,
                         confidence=score,
@@ -429,10 +580,17 @@ class CartonDetectorAdapter:
 
         conf = float(conf_override if conf_override is not None else self.conf_threshold)
 
+        crop_bounds: List[Tuple[int, int]] = []
+        infer_frames: List[np.ndarray] = []
+        for f in valid_frames:
+            x0, x1 = self._content_crop(f)
+            crop_bounds.append((x0, x1))
+            infer_frames.append(f[:, x0:x1] if x1 > x0 else f)
+
         t_start = time.perf_counter()
         try:
             results = self._model.predict(
-                source=valid_frames,
+                source=infer_frames,
                 conf=conf,
                 iou=self.iou_threshold,
                 imgsz=self.imgsz,
@@ -457,13 +615,32 @@ class CartonDetectorAdapter:
         self._latencies.append(self.last_latency_ms)
         self.total_frames_processed += len(valid_frames)
 
+        worker_polys_by_cam: Dict[str, Sequence[Any]] = {}
+        if worker_polygons_by_cam is None and infer_frames:
+            batched = self._worker_polygons_batch(infer_frames)
+            worker_polys_by_cam = {
+                cid: self._offset_worker_polygons(batched[i], crop_bounds[i][0])
+                for i, cid in enumerate(valid_cids)
+            }
+
         for i, cid in enumerate(valid_cids):
             w, h = dims[cid]
             t_sec = timestamps_sec.get(cid, 0.0)
             res = results[i] if i < len(results) else None
-            w_polys = worker_polygons_by_cam.get(cid) if worker_polygons_by_cam else None
+            w_polys = worker_polys_by_cam.get(cid) if worker_polys_by_cam else None
+            if w_polys is None:
+                w_polys = worker_polys_by_cam.get(cid, [])
             if res is not None:
-                output[cid] = self._parse_results(res, cid, frame_idx, t_sec, w, h, worker_polygons=w_polys)
+                output[cid] = self._parse_results(
+                    res,
+                    cid,
+                    frame_idx,
+                    t_sec,
+                    w,
+                    h,
+                    worker_polygons=w_polys,
+                    x_offset=crop_bounds[i][0],
+                )
 
         return output
 
